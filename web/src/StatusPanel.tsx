@@ -1,0 +1,115 @@
+// Whether the IDS is working now, down the right side of every screen: the
+// collector storing alerts, what is stored and the engines' HOME_NET. The
+// engines themselves, with their dots, head the Overview. The "… ago" times
+// count on between answers, and when none comes.
+import { ENGINES, NAMES, byEngine, count, machineTime, runningNow, useNow, type Fetched, type Status } from "./api";
+import { clock, duration } from "./time";
+
+// The collector stores alerts several times a minute on the lab network.
+const QUIET_MS = 5 * 60 * 1000;
+
+type Level = "ok" | "warn" | "down" | "unknown";
+
+function summary(
+  { data, error, receivedMs }: Fetched<Status>,
+  machineNow: number,
+  now: number,
+): { level: Level; label: string; detail: string } {
+  if (error) {
+    const updated = receivedMs !== null ? `\nUpdated ${duration(now - receivedMs)} ago` : "";
+    return { level: "down", label: "Not updating", detail: `${error}${updated}` };
+  }
+  if (!data) return { level: "unknown", label: "Checking…", detail: "" };
+  const running = data.running;
+  if (!running) return { level: "unknown", label: "Status unknown", detail: "The API cannot see which programs run" };
+  if (!running.collector) {
+    return { level: "down", label: "Not updating", detail: "The collector is not running: no new alerts are stored" };
+  }
+  // The API names only the engines this machine runs.
+  const stopped = ENGINES.filter((engine) => running[engine] === false);
+  if (stopped.length) {
+    return {
+      level: "warn",
+      label: "Partly working",
+      detail: `${stopped.map((engine) => NAMES[engine]).join(" and ")} not running`,
+    };
+  }
+  const saved = data.collector_saved_ms;
+  if (saved === null || machineNow - saved > QUIET_MS) {
+    return {
+      level: "warn",
+      label: "No new alerts",
+      detail: saved === null ? "Nothing stored yet" : `Nothing stored for ${duration(machineNow - saved)}`,
+    };
+  }
+  return { level: "ok", label: "Live", detail: "" };
+}
+
+/** One program: its name with a dot that says whether it runs, grey when that is not known. */
+function Part({ name, running, lines }: { name: string; running: boolean | null; lines: string[] }) {
+  const state = running === null ? "unknown" : running ? "on" : "off";
+  return (
+    <div className={`status-item ${state}`}>
+      <div className="status-name">
+        {name}
+        {running === false && " · stopped"}
+      </div>
+      {lines.filter(Boolean).map((line) => (
+        <div key={line} className="muted">
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function StatusPanel({ status }: { status: Fetched<Status> }) {
+  const now = useNow();
+  const machineNow = machineTime(status, now) ?? now;
+  const { level, label, detail } = summary(status, machineNow, now);
+  const { data } = status;
+  const engines = data ? byEngine(data.engines) : [];
+  const oldest = engines.map(([, info]) => info.oldest_ms).filter((ms): ms is number => ms !== null);
+
+  return (
+    <aside className={`status-panel ${level}`} aria-label="IDS status">
+      <div className="status-head" role="status">
+        <span className="status-dot" aria-hidden="true" />
+        <strong>{label}</strong>
+      </div>
+      {detail && <p className="status-detail">{detail}</p>}
+      {data && (
+        <>
+          <Part
+            name="Collector"
+            running={runningNow(status)?.collector ?? null}
+            lines={[
+              data.collector_saved_ms !== null
+                ? `stored alerts ${duration(machineNow - data.collector_saved_ms)} ago`
+                : "nothing stored yet",
+            ]}
+          />
+          <div className="status-item">
+            <div className="status-name plain">Stored alerts</div>
+            <div>{count(engines.reduce((total, [, info]) => total + info.alerts, 0))}</div>
+            {engines.length > 1 && (
+              <div className="muted">
+                {engines.map(([engine, info]) => `${NAMES[engine]} ${count(info.alerts)}`).join(" · ")}
+              </div>
+            )}
+            {oldest.length > 0 && <div className="muted">since {clock(Math.min(...oldest), machineNow)}</div>}
+            {data.alert_retention && <div className="muted">newest {count(data.alert_retention)} kept</div>}
+          </div>
+          <div className="status-item">
+            <div className="status-name plain">HOME_NET</div>
+            {engines.map(([engine, info]) => (
+              <div key={engine}>
+                {NAMES[engine]} {info.home_net ?? "not found"}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}

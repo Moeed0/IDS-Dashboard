@@ -1,0 +1,20 @@
+# The dashboard: the API and the React page on port 8501.
+# deploy/install-services.sh fills in @USER@ and @REPO_DIR@ and installs it
+# in /etc/systemd/system.
+[Unit]
+Description=IDS dashboard and its API (port 8501)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO_DIR@
+ExecStart=@REPO_DIR@/.venv/bin/python src/dashboard_api.py --host 0.0.0.0 --port 8501
+Restart=on-failure
+RestartSec=5
+# Each line reaches the journal at once (journalctl -u ids-dashboard).
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

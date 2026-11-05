@@ -1,0 +1,567 @@
+/* Light and dark themes follow the system. The engine colours are slots 1 and
+   2 of the data-viz reference palette, stepped for each theme; both pairs pass
+   its colour-blind separation and contrast checks on these surfaces. */
+:root {
+  color-scheme: light;
+  --page: #f6f6f4;
+  --surface: #ffffff;
+  --text: #1c1c1a;
+  --muted: #5f5e5a;
+  --border: #dcdbd5;
+  --grid: #e8e7e1;
+  --accent: #2a78d6;
+  --accent-text: #ffffff;
+  --warning-surface: #fff4d6;
+  --warning-border: #d9a520;
+  --error: #b42318;
+  --ok: #1a7f37;
+  --ok-ring: rgba(26, 127, 55, 0.35);
+  --snort: #2a78d6;
+  --suricata: #eb6834;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0e1117;
+    --surface: #161b22;
+    --text: #f0f6fc;
+    --muted: #9ba5b0;
+    --border: #30363d;
+    --grid: #262c34;
+    --accent: #3987e5;
+    --accent-text: #ffffff;
+    --warning-surface: #3a2f12;
+    --warning-border: #9e7a1c;
+    --error: #ff7b72;
+    --ok: #3fb950;
+    --ok-ring: rgba(63, 185, 80, 0.35);
+    --snort: #3987e5;
+    --suricata: #d95926;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 16px;
+  margin: 14px 0 6px;
+}
+
+h3 {
+  font-size: 14px;
+  margin: 6px 0 4px;
+}
+
+main p {
+  margin: 6px 0;
+}
+
+/* A heading with the controls for its section. */
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 14px 0 6px;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.section-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.section-head select,
+.section-head button {
+  padding: 2px 8px;
+}
+
+code {
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--error);
+}
+
+.warning {
+  background: var(--warning-surface);
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+/* Layout */
+.app header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.app header .header-note {
+  margin-left: auto;
+}
+
+/* The screen, with the status panel down its right side; above it on a
+   narrow screen. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  align-items: start;
+  gap: 16px;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 0 16px 24px;
+}
+
+main {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .layout .status-panel {
+    position: static;
+    order: -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+  }
+}
+
+/* Status panel: whether the IDS stores alerts now */
+.status-panel {
+  position: sticky;
+  top: 10px;
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+
+.status-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-panel.ok .status-dot {
+  background: var(--ok);
+  animation: live 2s ease-out infinite;
+}
+
+.status-panel.warn .status-dot {
+  background: var(--warning-border);
+}
+
+.status-panel.down .status-dot {
+  background: var(--error);
+}
+
+.status-panel.ok .status-head strong {
+  color: var(--ok);
+}
+
+.status-panel.down .status-head strong {
+  color: var(--error);
+}
+
+@keyframes live {
+  0% {
+    box-shadow: 0 0 0 0 var(--ok-ring);
+  }
+  80%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-panel.ok .status-dot {
+    animation: none;
+  }
+}
+
+.status-detail {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-line;
+}
+
+.status-name {
+  font-weight: 600;
+}
+
+.status-item .muted {
+  font-size: 12px;
+}
+
+/* A program's dot: green while it runs, red when stopped, grey when not known. */
+.status-item.on .status-name::before,
+.status-item.off .status-name::before,
+.status-item.unknown .status-name::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--ok);
+}
+
+.status-item.off .status-name {
+  color: var(--error);
+}
+
+.status-item.off .status-name::before {
+  background: var(--error);
+}
+
+.status-item.unknown .status-name::before {
+  background: var(--muted);
+}
+
+nav {
+  display: flex;
+  gap: 4px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* One engine: its table takes the whole width. */
+.columns > :only-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Controls */
+button,
+.button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+.button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+button.current {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+input,
+select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  margin: 16px 0 8px;
+}
+
+.filters label:not(.choice) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.filters .grow {
+  flex: 1 1 260px;
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+legend {
+  color: var(--muted);
+  margin-bottom: 4px;
+  width: 100%;
+}
+
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tiles */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+
+.tile-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Whether a program runs: green, red when it is stopped, grey when not known. */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.dot.on {
+  background: var(--ok);
+}
+
+.dot.off {
+  background: var(--error);
+}
+
+.dot.unknown {
+  background: var(--muted);
+}
+
+.tile-value {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.tile-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Tables */
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--grid);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+td.message {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pager label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pager input {
+  width: 72px;
+}
+
+.token {
+  max-width: 360px;
+  margin: 15vh auto;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.token label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Chart */
+.chart {
+  position: relative;
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px 2px;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: pan-y;
+}
+
+.tooltip i {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+
+.axis {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.end-label {
+  fill: var(--text);
+  font-size: 12px;
+}
+
+.crosshair {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.dot {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.tooltip {
+  position: absolute;
+  top: 8px;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}

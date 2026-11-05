@@ -1,0 +1,4 @@
+# What the collector and the dashboard API need (tested with Python 3.13):
+#     .venv/bin/pip install -r requirements.txt
+starlette==1.7.0
+uvicorn==0.54.0

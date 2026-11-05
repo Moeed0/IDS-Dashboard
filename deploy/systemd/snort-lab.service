@@ -1,0 +1,17 @@
+[Unit]
+Description=Snort 3 IDS - Lab Passive Capture
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/snort \
+    -c /usr/local/etc/snort/snort.lua \
+    -i ens38 \
+    -A alert_json \
+    -l /var/log/snort
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

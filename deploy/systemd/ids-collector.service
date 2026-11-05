@@ -1,0 +1,22 @@
+# The collector: reads Snort's and Suricata's alert logs and stores the
+# alerts in the dashboard's database. deploy/install-services.sh fills in
+# @USER@ and @REPO_DIR@ and installs it in /etc/systemd/system.
+[Unit]
+Description=IDS alert collector (Snort and Suricata alerts to the dashboard database)
+After=network-online.target snort-lab.service suricata.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO_DIR@
+ExecStart=@REPO_DIR@/.venv/bin/python src/live_dual_collector.py
+# As Ctrl+C does: the collector stores what it has read before it stops.
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
+# Each line reaches the journal at once (journalctl -u ids-collector).
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

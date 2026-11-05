@@ -1,0 +1,319 @@
+import asyncio
+import json
+import re
+import sqlite3
+import stat
+import time
+from datetime import datetime
+from urllib.parse import urlencode
+
+import pytest
+
+from dashboard_api import create_app, new_token, save_new_token
+from ids.combined_detections import PKT
+from ids.config import api_token_required
+from ids.dashboard_data import alerts, overview
+
+TOKEN = "test-token"
+
+
+def _ms(*parts):
+    return int(datetime(*parts, tzinfo=PKT).timestamp() * 1000)
+
+
+def _database(path, rows):
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE alerts (id INTEGER PRIMARY KEY, engine TEXT, "
+        "event_ts_utc INTEGER, gid INTEGER, sid INTEGER, rev INTEGER, msg TEXT, "
+        "classification TEXT, severity INTEGER, priority INTEGER, protocol TEXT, "
+        "service TEXT, src_addr TEXT, src_port INTEGER, dst_addr TEXT, "
+        "dst_port INTEGER, rule_key TEXT, raw_json TEXT)"
+    )
+    connection.executemany(
+        "INSERT INTO alerts (engine, event_ts_utc, gid, sid, msg, severity, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, 3, '{}')",
+        rows,
+    )
+    connection.commit()
+    connection.close()
+
+
+ROWS = [
+    ("suricata", _ms(2026, 11, 3, 12, 38, 48), 1, 2001119, "ET DNS Standard query response, Refused"),
+    ("snort", _ms(2026, 11, 3, 12, 39, 49), 116, 444, "(ipv4) IPv4 option set"),
+    ("suricata", _ms(2026, 11, 3, 12, 40, 8), 1, 2200007, "SURICATA IPv4 padding required"),
+]
+
+
+@pytest.fixture
+def db_path(tmp_path):
+    path = tmp_path / "ids_live.db"
+    _database(path, ROWS)
+    return path
+
+
+def _app(db_path, web_dist=None):
+    return create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=web_dist,
+    )
+
+
+def _get(app, path, token=TOKEN, **query):
+    """One GET request through the ASGI app: status, headers and body."""
+    headers = [(b"host", b"testserver")]
+    if token:
+        headers.append((b"authorization", f"Bearer {token}".encode()))
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(),
+        "query_string": urlencode(query).encode(), "root_path": "",
+        "headers": headers, "client": ("127.0.0.1", 50000), "server": ("testserver", 80),
+    }
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    body = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
+    return (
+        start["status"],
+        {name.decode().lower(): value.decode() for name, value in start["headers"]},
+        body,
+    )
+
+
+def test_every_endpoint_but_health_needs_the_token(db_path):
+    app = _app(db_path)
+
+    assert _get(app, "/health", token=None)[0] == 200
+    for path in ("/options", "/overview", "/status", "/live", "/alerts", "/export/window", "/export"):
+        status, headers, body = _get(app, path, token=None)
+        assert (status, json.loads(body)) == (401, {"error": "missing or wrong token"})
+        assert headers["www-authenticate"] == "Bearer"
+        assert _get(app, path, token="wrong")[0] == 401
+    with pytest.raises(ValueError):
+        create_app(db_path=db_path, ids_sources={}, token="")
+
+
+def test_the_token_can_be_switched_off_for_testing(db_path, monkeypatch):
+    # The process environment wins over .env.
+    for value, required in (("false", False), ("Off", False), ("0", False), ("true", True)):
+        monkeypatch.setenv("IDS_API_REQUIRE_TOKEN", value)
+        assert api_token_required() is required
+
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=None, rule_intelligence=None, web_dist=None,
+    )
+
+    for path in ("/options", "/overview", "/status", "/live", "/alerts", "/export/window"):
+        assert _get(app, path, token=None)[0] == 200
+    # A browser that still sends an old token gets in too.
+    assert _get(app, "/overview", token="old-token")[0] == 200
+
+
+def test_the_screens_get_what_the_data_functions_return(db_path):
+    app = _app(db_path)
+
+    status, _, body = _get(app, "/overview")
+    assert status == 200
+    assert json.loads(body) == overview(db_path, {})
+    status, _, body = _get(app, "/overview", step_minutes="5", top_rules_length="10 minutes")
+    assert status == 200
+    assert json.loads(body) == overview(
+        db_path, {}, step_minutes=5, top_rules_length="10 minutes",
+    )
+
+    status, _, body = _get(app, "/alerts", engine="suricata", page_size="1", page="2")
+    assert status == 200
+    assert json.loads(body) == alerts(db_path, engine="suricata", page=2, page_size=1)
+
+    options = json.loads(_get(app, "/options")[2])
+    assert options["default_export_length"] in options["export_lengths"]
+    assert {"label": "All stored", "ms": None} in options["time_ranges"]
+    assert (options["chart_steps"], options["default_chart_step"]) == ([5, 10, 15], 15)
+    assert options["default_top_rules_length"] in options["export_lengths"]
+
+
+def test_overview_parameters_are_checked(db_path):
+    app = _app(db_path)
+
+    def error(**query):
+        status, _, body = _get(app, "/overview", **query)
+        assert status == 400
+        return json.loads(body)["error"]
+
+    assert error(step_minutes="7") == "step_minutes must be one of: 5, 10, 15"
+    assert error(step_minutes="five") == "step_minutes must be a whole number"
+    assert error(top_rules_length="2 hours").startswith(
+        "top_rules_length must be one of: 5 minutes, 10 minutes, 15 minutes,"
+    )
+
+
+def test_the_status_says_what_runs_and_when_alerts_were_stored(db_path, tmp_path):
+    state_file = tmp_path / "ids_collector_state.json"
+    state_file.write_text("{}")
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, state_file=state_file,
+        rule_intelligence=None, web_dist=None,
+    )
+
+    status, _, body = _get(app, "/status")
+
+    assert status == 200
+    data = json.loads(body)
+    assert set(data) == {
+        "checked_ms", "running", "collector_saved_ms", "complete_end_ms", "alert_retention",
+        "engines",
+    }
+    assert data["collector_saved_ms"] == int(state_file.stat().st_mtime * 1000)
+    assert data["engines"] == overview(db_path, {})["engines"]
+
+
+def test_the_live_chart_ends_now(db_path):
+    status, _, body = _get(_app(db_path), "/live")
+
+    assert status == 200
+    data = json.loads(body)
+    assert set(data) == {"checked_ms", "window_ms", "start_ms", "step_ms", "alerts"}
+    assert abs(data["checked_ms"] - time.time() * 1000) < 60_000
+    assert (data["window_ms"], data["step_ms"]) == (900_000, 30_000)
+    assert data["start_ms"] <= data["checked_ms"] - data["window_ms"]
+    assert set(data["alerts"]) == {"snort", "suricata"}
+
+
+def test_alert_list_parameters_are_checked(db_path):
+    app = _app(db_path)
+
+    def error(**query):
+        status, _, body = _get(app, "/alerts", **query)
+        assert status == 400
+        return json.loads(body)["error"]
+
+    assert error(engine="zeek") == "engine must be one of: snort, suricata"
+    assert error(page="two") == "page must be a whole number"
+    assert error(page_size="1000") == "page_size must be from 1 to 250"
+    assert error(range="Last week") == (
+        "range must be one of: Last 24 hours, Last 7 days, Last 30 days, All stored"
+    )
+    assert error(range="All stored", since_ms="1") == "give range or since_ms, not both"
+    rows = json.loads(_get(app, "/alerts", range="All stored", search="padding")[2])["rows"]
+    assert [row["rule"] for row in rows] == ["2200007"]
+
+
+def test_export_gives_the_file_with_its_window_and_counts(db_path, tmp_path):
+    app = _app(db_path)
+
+    status, _, body = _get(app, "/export/window", length="5 minutes")
+    window = json.loads(body)
+    assert status == 200
+    # Snort's newest alert at 12:39:49 sets the latest complete time.
+    assert (window["end_ms"], window["moved_back"]) == (_ms(2026, 11, 3, 12, 39, 48), False)
+
+    status, headers, body = _get(app, "/export", length="5 minutes")
+    assert status == 200
+    assert headers["content-type"] == "application/json"
+    assert headers["content-disposition"] == (
+        'attachment; filename="snort_suricata_combined_20261103_1234_5min.json"'
+    )
+    assert (headers["x-window-start-ms"], headers["x-window-end-ms"]) == (
+        str(window["start_ms"]), str(window["end_ms"]),
+    )
+    assert (headers["x-alerts-snort"], headers["x-alerts-suricata"]) == ("0", "1")
+    assert (headers["x-packets"], headers["x-both-engine-packets"]) == ("1", "0")
+    assert json.loads(body)["alerts"] == {"suricata": 1}
+    assert _get(app, "/export", length="2 hours")[0] == 400
+
+    empty = tmp_path / "empty.db"
+    _database(empty, [])
+    status, _, body = _get(_app(empty), "/export/window")
+    assert (status, json.loads(body)) == (404, {"error": "no alerts stored yet"})
+
+
+def test_a_missing_database_is_reported(tmp_path):
+    status, _, body = _get(_app(tmp_path / "missing.db"), "/overview")
+
+    assert status == 503
+    assert json.loads(body)["error"].startswith("could not read the live database")
+
+
+def test_the_built_react_page_is_served_at_the_root(db_path, tmp_path):
+    web_dist = tmp_path / "dist"
+    (web_dist / "assets").mkdir(parents=True)
+    (web_dist / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8")
+    (web_dist / "assets" / "index.js").write_text("console.log(1)", encoding="utf-8")
+    app = _app(db_path, web_dist)
+
+    # The page and its files need no token: the page asks for it.
+    status, headers, body = _get(app, "/", token=None)
+    assert (status, headers["content-type"].split(";")[0]) == (200, "text/html")
+    assert b"id=root" in body
+    assert _get(app, "/assets/index.js", token=None)[0] == 200
+    assert _get(app, "/missing.js", token=None)[0] == 404
+    # The API's own paths still answer first, and still ask for the token.
+    assert _get(app, "/overview", token=None)[0] == 401
+    assert json.loads(_get(app, "/health", token=None)[2]) == {"ok": True}
+
+
+def test_without_a_built_page_the_root_is_not_found(db_path, tmp_path):
+    assert _get(_app(db_path, tmp_path / "no-build"), "/", token=None)[0] == 404
+
+
+def test_new_tokens_are_short_and_easy_to_type():
+    tokens = {new_token() for _ in range(50)}
+
+    assert len(tokens) == 50
+    # Four groups of four letters and digits, without i, l, o or u, which
+    # can be taken for 1, 0 or v.
+    letter = "[0-9a-hjkmnp-tv-z]"
+    assert all(re.fullmatch(f"({letter}{{4}}-){{3}}{letter}{{4}}", token) for token in tokens)
+
+
+def test_a_new_token_takes_the_old_ones_place_in_env(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "IDS_DB_FILE=ids_live.db\nIDS_API_TOKEN=old\n# A note\nexport IDS_API_TOKEN = older\n",
+        encoding="utf-8",
+    )
+
+    token = save_new_token(env_file)
+
+    # The other lines stay; only one token line is left, so it is the one read.
+    assert env_file.read_text(encoding="utf-8") == (
+        f"IDS_DB_FILE=ids_live.db\nIDS_API_TOKEN={token}\n# A note\n"
+    )
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    assert not (tmp_path / ".env.new").exists()
+
+    without = tmp_path / "without.env"
+    without.write_text("IDS_DB_FILE=ids_live.db", encoding="utf-8")
+    added = save_new_token(without)
+    assert without.read_text(encoding="utf-8") == f"IDS_DB_FILE=ids_live.db\nIDS_API_TOKEN={added}\n"
+    missing = tmp_path / "missing.env"
+    created = save_new_token(missing)
+    assert missing.read_text(encoding="utf-8") == f"IDS_API_TOKEN={created}\n"
+
+
+def test_a_machine_running_one_engine_offers_only_that_engine(db_path):
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        engines=("suricata",),
+    )
+
+    def get(path, **query):
+        status, _, body = _get(app, path, **query)
+        return status, json.loads(body)
+
+    assert get("/options")[1]["engines"] == ["suricata"]
+    assert list(get("/overview")[1]["engines"]) == ["suricata"]
+    assert list(get("/status")[1]["engines"]) == ["suricata"]
+    assert list(get("/live")[1]["alerts"]) == ["suricata"]
+    assert get("/alerts", engine="snort") == (400, {"error": "engine must be one of: suricata"})
+    assert get("/alerts", range="All stored")[1]["total"] == 2
+    # One second before Suricata's newest alert, not Snort's.
+    assert get("/export/window", length="1 hour")[1]["end_ms"] == _ms(2026, 11, 3, 12, 40, 7)
