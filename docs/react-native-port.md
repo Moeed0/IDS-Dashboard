@@ -216,7 +216,7 @@ The chart:
   redraws every second.
 - **Edges:** points that move past the left edge are cut off.
 - **Labels:** the time is labelled every 2 minutes, and the heading says
-  "Last 15 minutes".
+  "Live" (it showed "Last 15 minutes" until 5 November 2026).
 - **Hover:** the hover box lists only the lines that reach that point.
 - **Height:** it grows on a burst as the 24-hour chart does.
 

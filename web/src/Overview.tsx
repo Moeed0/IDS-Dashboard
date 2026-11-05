@@ -65,7 +65,7 @@ function LiveSection({ choice, onUnauthorized }: { choice: ReactNode; onUnauthor
   return (
     <section>
       <div className="section-head">
-        <h2>{data ? `Last ${data.window_ms / 60_000} minutes` : "Live"}</h2>
+        <h2>Live</h2>
         {choice}
       </div>
       {error && <p className="error">{error}</p>}
