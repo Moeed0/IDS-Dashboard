@@ -344,6 +344,11 @@ export function runningNow({ data, error }: Fetched<Status>): Status["running"] 
 
 export const count = (value: number) => value.toLocaleString("en-US");
 
+/** A rule as gid:sid:rev, the way Snort names rules (the alert search finds it so); gid:sid without a revision. */
+export function ruleName({ gid, sid, rev }: { gid: number | null; sid: number | null; rev: number | null }): string {
+  return `${gid ?? ""}:${sid ?? ""}${rev === null ? "" : `:${rev}`}`;
+}
+
 /**
  * A choice this browser remembers (the chart's size, its step), kept only
  * while it is one of the allowed values.

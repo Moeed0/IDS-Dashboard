@@ -4,6 +4,7 @@ import {
   NAMES,
   count,
   engineNames,
+  ruleName,
   useApi,
   type AlertPage,
   type AlertRow,
@@ -12,22 +13,25 @@ import {
 } from "./api";
 import { stamp } from "./time";
 
-type Column = { title: string; value: (row: AlertRow) => string; className?: string };
+type Column = {
+  title: string;
+  value: (row: AlertRow) => string;
+  className?: string;
+  /** Shown on hover over the heading. */
+  hint?: string;
+};
 
-const TIME: Column = { title: "Time", value: (row) => stamp(row.time_ms) };
-const GID: Column = { title: "GID", value: (row) => String(row.gid ?? ""), className: "number" };
-const SID: Column = { title: "SID", value: (row) => String(row.sid ?? ""), className: "number" };
-const REV: Column = { title: "Rev", value: (row) => String(row.rev ?? ""), className: "number" };
+const TIME: Column = { title: "Time", value: (row) => stamp(row.time_ms), className: "time" };
+const RULE: Column = { title: "Rule", value: ruleName, className: "rule", hint: "GID:SID:Rev" };
 const SEVERITY: Column = { title: "Severity", value: (row) => String(row.severity), className: "number" };
-// The message comes last: it can be long.
+// The message comes last and takes the width the others leave, on one line:
+// a longer one ends in "…" and shows whole on hover.
 const MESSAGE: Column = { title: "Message", value: (row) => row.message, className: "message" };
-const PANEL_COLUMNS = [TIME, GID, SID, REV, SEVERITY, MESSAGE];
+const PANEL_COLUMNS = [TIME, RULE, SEVERITY, MESSAGE];
 const TABLE_COLUMNS: Column[] = [
   TIME,
   { title: "Engine", value: (row) => NAMES[row.engine] ?? row.engine },
-  GID,
-  SID,
-  REV,
+  RULE,
   SEVERITY,
   { title: "Protocol", value: (row) => row.protocol ?? "" },
   { title: "Source", value: (row) => row.src ?? "" },
@@ -83,7 +87,7 @@ export function AlertExplorer({ options, onUnauthorized }: { options: Options; o
           Search
           <input
             type="search"
-            placeholder="Message, SID, address or time"
+            placeholder="Message, rule, address or time"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -191,7 +195,7 @@ function AlertTable({
               <thead>
                 <tr>
                   {columns.map((column) => (
-                    <th key={column.title} className={column.className}>
+                    <th key={column.title} className={column.className} title={column.hint}>
                       {column.title}
                     </th>
                   ))}
@@ -200,11 +204,14 @@ function AlertTable({
               <tbody>
                 {data.rows.map((row) => (
                   <tr key={row.id}>
-                    {columns.map((column) => (
-                      <td key={column.title} className={column.className}>
-                        {column.value(row)}
-                      </td>
-                    ))}
+                    {columns.map((column) => {
+                      const text = column.value(row);
+                      return (
+                        <td key={column.title} className={column.className} title={column === MESSAGE ? text : undefined}>
+                          {text}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>

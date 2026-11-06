@@ -4,6 +4,7 @@ import {
   byEngine,
   count,
   machineTime,
+  ruleName,
   runningNow,
   useApi,
   useNow,
@@ -124,21 +125,21 @@ function RuleTable({ rules }: { rules: TopRule[] }) {
       <table>
         <thead>
           <tr>
-            <th className="number">GID</th>
-            <th className="number">SID</th>
-            <th className="number">Rev</th>
-            <th className="number">Alerts</th>
+            <th className="rule" title="GID:SID:Rev">
+              Rule
+            </th>
+            <th className="number alerts">Alerts</th>
             <th>Message</th>
           </tr>
         </thead>
         <tbody>
           {rules.map((rule) => (
             <tr key={`${rule.rule}:${rule.rev}`}>
-              <td className="number">{rule.gid ?? ""}</td>
-              <td className="number">{rule.sid ?? ""}</td>
-              <td className="number">{rule.rev ?? ""}</td>
+              <td className="rule">{ruleName(rule)}</td>
               <td className="number">{count(rule.alerts)}</td>
-              <td className="message">{rule.message}</td>
+              <td className="message" title={rule.message}>
+                {rule.message}
+              </td>
             </tr>
           ))}
         </tbody>

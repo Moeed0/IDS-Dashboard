@@ -375,6 +375,11 @@ legend {
   gap: 6px;
 }
 
+/* As tall as the boxes beside them, so that the choices line up with those. */
+.filters .choice {
+  min-height: calc(1.45em + 14px);
+}
+
 /* Tiles */
 .tiles {
   display: grid;
@@ -463,9 +468,31 @@ tbody tr:last-child td {
   font-variant-numeric: tabular-nums;
 }
 
+td.time,
+td.rule {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Every row is one line, so that the rows of tables side by side line up
+   and the tables end level. The rule (1:2002749:14) and alert count columns
+   are as wide in every table, for their longest values. */
+.rule {
+  min-width: calc(11ch + 16px);
+}
+
+.alerts {
+  min-width: calc(7ch + 16px);
+}
+
+/* The message takes the width the other columns leave, at least 120px (a
+   narrower table scrolls), and ends in "…" when it is longer; hovering shows
+   it whole. */
 td.message {
-  white-space: normal;
-  min-width: 220px;
+  width: 100%;
+  max-width: 0;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pager {

@@ -311,11 +311,20 @@ def test_alert_list_filters_by_engine_time_and_search(tmp_path):
     # in any case.
     assert rules(search="refused") == ["2001119"]
     assert rules(search="116:444") == ["116:444"]
+    # The rule as the screens show it, gid:sid:rev.
+    assert rules(search="1:2001119:1") == ["2001119"]
     assert rules(search="not suspicious") == ["2001119"]
     assert rules(search="192.168.50.1:53") == ["2001119"]
     assert rules(search="12:40:08") == ["2030387"]
     assert rules(search="100%") == []
     assert alerts(db_path, search="nothing like this")["pages"] == 1
+
+
+def test_alert_search_finds_a_rule_without_a_revision(tmp_path):
+    db_path = tmp_path / "ids_live.db"
+    _database(db_path, [_alert("snort", _ms(2026, 11, 3, 12, 39), *IPV4_OPTION, rev=None)])
+
+    assert [row["rule"] for row in alerts(db_path, search="116:444")["rows"]] == ["116:444"]
 
 
 def _proc(tmp_path, processes):

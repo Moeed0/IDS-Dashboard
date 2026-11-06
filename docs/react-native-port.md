@@ -179,7 +179,8 @@ What the screen shows:
   in that browser). See "Live chart" below.
 - **Top rules** (`null` likewise): each engine's most frequent rules over the
   last `top_rules_length` (one of the export lengths, `1 day` when left out),
-  as a list (GID, SID, revision, alerts, message); a rule that fired with two
+  as a list (rule as `gid:sid:rev`, alerts, message), one line a rule like
+  the Alert Explorer's; a rule that fired with two
   revisions has a row for each. `rule` is the SID with a GID other than 1
   first, as the combined export names rules.
 
@@ -285,18 +286,22 @@ When the IDS machine or its API stops answering:
   own clock, which the stored times follow. `since_ms` (epoch ms) can be sent
   instead; left out, the list has every stored alert.
 - `page` starts at 1; `page_size` is 1 to 250.
-- `search` matches the message, the rule (`116:444`), the class, protocol,
+- `search` matches the message, the rule as the screens show it
+  (`116:444:1`), the class, protocol,
   service, either endpoint (`192.168.50.1:53`) or the PKT time
   (`2026-11-03 12:40`), in any case. A page past the last returns the last
   page.
-- `rule` is the SID, with the GID first when it is not 1 (what the search
-  matches); `gid`, `sid` and `rev` are the rule's numbers (`rev` is `null`
-  when the engine gave none). `severity` is 1
+- `rule` is the SID, with the GID first when it is not 1; `gid`, `sid` and
+  `rev` are the rule's numbers (`rev` is `null` when the engine gave none),
+  which the screens show as `gid:sid:rev`. `severity` is 1
   (most severe) to 4. `src` and `dst` are `address:port`, `[IPv6]:port`, the
   address alone (no ports), or `null` (no IP addresses, such as ARP).
-- Rows the dashboard shows: time, GID, SID, revision, severity, message
-  (side by side); time, engine, GID, SID, revision, severity, protocol,
-  source, destination, message (combined).
+- Rows the dashboard shows: time, rule (`gid:sid:rev`, such as
+  `1:2009206:4`; `gid:sid` without a revision), severity, message (side by
+  side); time, engine, rule, severity, protocol, source, destination,
+  message (combined). Each row is one line, so that the
+  two lists side by side line up: a message too long for its column ends in
+  "…" and shows whole on hover.
 
 ## Combined JSON export
 

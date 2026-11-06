@@ -308,13 +308,14 @@ def _top_rules(
     }
 
 
-# What the alert search looks in: the message, the rule, the class, the
-# protocol, the service, both endpoints and the PKT time.
+# What the alert search looks in: the message, the rule as the screens show
+# it (gid:sid:rev), the class, the protocol, the service, both endpoints and
+# the PKT time.
 _SEARCHED = " || ' ' || ".join(
     f"COALESCE({expression}, '')"
     for expression in (
         "msg",
-        "gid || ':' || sid",
+        "gid || ':' || sid || COALESCE(':' || rev, '')",
         "classification",
         "protocol",
         "service",

@@ -41,18 +41,6 @@ export function clock(ms: number, nowMs: number): string {
   return stamp(ms);
 }
 
-/** start → end, with both dates when the span is not all today. */
-export function span(startMs: number, endMs: number, nowMs: number): string {
-  if (date(startMs) === date(nowMs) && date(endMs) === date(nowMs)) {
-    return `${time(startMs)} → ${time(endMs)}`;
-  }
-  const long = (ms: number) => {
-    const { year, month, day } = pkt(ms);
-    return year === pkt(nowMs).year ? `${day} ${MONTHS[month]} ${time(ms)}` : stamp(ms);
-  };
-  return `${long(startMs)} → ${long(endMs)}`;
-}
-
 /** 35 s, 4 min, 47 h, 17 days */
 export function duration(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
