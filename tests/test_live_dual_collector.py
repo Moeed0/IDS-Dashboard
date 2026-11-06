@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import gzip
 import json
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 
 from ids.config import get_settings
+from ids.db import connect_database, insert_alert_batch
 from ids.tailer import PersistentJsonTailer
 from live_dual_collector import (
     PendingBatch,
@@ -13,6 +16,7 @@ from live_dual_collector import (
     flush_pending,
     handle_line,
     log_files,
+    run_periodic_retention,
     setup_database,
 )
 
@@ -318,3 +322,55 @@ def test_only_the_engines_in_ids_engines_are_read(monkeypatch, tmp_path):
     assert log_files(settings) == {"suricata": eve_file.resolve()}
     assert list(tailers) == ["suricata"]
     assert tailers["suricata"].path == eve_file.resolve()
+
+
+def test_the_alerts_past_the_limit_are_archived_or_with_0_archive_days_deleted(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr("ids.config.ENV_FILE", tmp_path / "no.env")
+    monkeypatch.setenv("IDS_DB_FILE", str(tmp_path / "ids.db"))
+    monkeypatch.setenv("IDS_ALERT_RETENTION", "1")
+    monkeypatch.setenv("IDS_ALERT_ARCHIVE_DIR", str(tmp_path / "archive"))
+    settings = get_settings()
+    setup_database(settings)
+    # 6 November 2026, 11:40 PKT.
+    start_ms = 1793947200000
+
+    def add(*numbers):
+        conn = connect_database(settings.db_file)
+        insert_alert_batch(conn, [
+            {
+                "engine": "snort",
+                "event_ts_utc": start_ms + number,
+                "msg": f"alert {number}",
+                "event_hash": f"hash-{number}",
+            }
+            for number in numbers
+        ])
+        conn.close()
+
+    def stored():
+        conn = connect_database(settings.db_file)
+        try:
+            return [row[0] for row in conn.execute("SELECT msg FROM alerts ORDER BY id")]
+        finally:
+            conn.close()
+
+    def archived():
+        path = tmp_path / "archive" / "days" / "2026-11-06.jsonl.gz"
+        with gzip.open(path, "rt", encoding="utf-8") as file:
+            return [json.loads(line)["msg"] for line in file]
+
+    add(1, 2, 3)
+    # Due: the last run was an hour ago.
+    run_periodic_retention(settings, time.monotonic() - 3600)
+    assert stored() == ["alert 3"]
+    assert archived() == ["alert 1", "alert 2"]
+
+    monkeypatch.setenv("IDS_ALERT_ARCHIVE_DAYS", "0")
+    settings = get_settings()
+    add(4, 5)
+    run_periodic_retention(settings, time.monotonic() - 3600)
+    assert stored() == ["alert 5"]
+    assert archived() == ["alert 1", "alert 2"]

@@ -139,6 +139,7 @@ def test_the_screens_get_what_the_data_functions_return(db_path):
     assert options["default_export_length"] in options["export_lengths"]
     assert {"label": "All stored", "ms": None} in options["time_ranges"]
     assert (options["chart_steps"], options["default_chart_step"]) == ([5, 10, 15], 15)
+    assert options["live_step_seconds"] == 30
     assert options["default_top_rules_length"] in options["export_lengths"]
 
 

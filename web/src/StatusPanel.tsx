@@ -1,8 +1,8 @@
-// Whether the IDS is working now, down the right side of every screen: the
-// collector storing alerts, what is stored and the engines' HOME_NET. The
-// engines themselves, with their dots, head the Overview. The "… ago" times
-// count on between answers, and when none comes.
-import { ENGINES, NAMES, byEngine, count, machineTime, runningNow, useNow, type Fetched, type Status } from "./api";
+// Whether the IDS is working now, down the right side of every screen, with
+// what is stored and the engines' HOME_NET. The engines and the collector,
+// with their dots, head the Overview. The "… ago" times count on between
+// answers, and when none comes.
+import { ENGINES, NAMES, byEngine, count, machineTime, useNow, type Fetched, type Status } from "./api";
 import { clock, duration } from "./time";
 
 // The collector stores alerts several times a minute on the lab network.
@@ -45,24 +45,6 @@ function summary(
   return { level: "ok", label: "Live", detail: "" };
 }
 
-/** One program: its name with a dot that says whether it runs, grey when that is not known. */
-function Part({ name, running, lines }: { name: string; running: boolean | null; lines: string[] }) {
-  const state = running === null ? "unknown" : running ? "on" : "off";
-  return (
-    <div className={`status-item ${state}`}>
-      <div className="status-name">
-        {name}
-        {running === false && " · stopped"}
-      </div>
-      {lines.filter(Boolean).map((line) => (
-        <div key={line} className="muted">
-          {line}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function StatusPanel({ status }: { status: Fetched<Status> }) {
   const now = useNow();
   const machineNow = machineTime(status, now) ?? now;
@@ -80,15 +62,6 @@ export function StatusPanel({ status }: { status: Fetched<Status> }) {
       {detail && <p className="status-detail">{detail}</p>}
       {data && (
         <>
-          <Part
-            name="Collector"
-            running={runningNow(status)?.collector ?? null}
-            lines={[
-              data.collector_saved_ms !== null
-                ? `stored alerts ${duration(machineNow - data.collector_saved_ms)} ago`
-                : "nothing stored yet",
-            ]}
-          />
           <div className="status-item">
             <div className="status-name plain">Stored alerts</div>
             <div>{count(engines.reduce((total, [, info]) => total + info.alerts, 0))}</div>

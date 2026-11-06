@@ -18,8 +18,8 @@ network interface (afpacket)
                           │
           src/live_dual_collector.py   reads both logs as they grow
                           │
-                     ids_live.db       SQLite, the newest IDS_ALERT_RETENTION alerts
-                          │
+                     ids_live.db       SQLite, the newest IDS_ALERT_RETENTION alerts;
+                          │            older ones zipped in alert-archive/ for 30 days
           src/dashboard_api.py         API and the page, on port 8501
             ├── web/        the dashboard (Overview, Alert Explorer)
             └── /export     combined JSON, enriched from the rule index
@@ -47,6 +47,7 @@ network interface (afpacket)
 | `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts |
 | `config/lab_phases.json` | The lab's attacker addresses, for the dashboard's warnings |
 | `data/` | Data each machine builds or downloads ([data/README.md](data/README.md)) |
+| `alert-archive/` | The alerts older than the database keeps, in 10-day zips (see [Old alerts](#old-alerts)) |
 | `tests/` | The tests |
 | `docs/` | The API and data ([docs/react-native-port.md](docs/react-native-port.md)), the export format and the modular plan |
 
@@ -191,6 +192,41 @@ The second command keeps new log files readable too.
 
 8. Open `http://<machine>:8501/`. The page asks for the API token,
    `IDS_API_TOKEN` in `.env`, which the API creates on its first start.
+
+## Old alerts
+
+The database keeps the newest `IDS_ALERT_RETENTION` alerts, about a week at
+600,000. The older ones are not deleted: every minute the collector moves
+them to `alert-archive/` (`IDS_ALERT_ARCHIVE_DIR`).
+
+- `days/2026-11-13.jsonl.gz` holds a day's alerts (PKT), a line of JSON an
+  alert with all its columns, while the day's 10-day period still has alerts
+  in the database.
+- Once a period has wholly left the database, its days are packed into
+  `alerts_2026-11-03_to_2026-11-12.zip`, with a `.jsonl` file a day. The
+  periods are fixed 10-day spans counted from 1 January 1970, so in November
+  2026 they start on the 3rd, 13th and 23rd.
+- The newest 3 zips stay, 30 days (`IDS_ALERT_ARCHIVE_DAYS=30` in
+  `IDS_ALERT_ARCHIVE_ZIP_DAYS=10`-day zips): a new zip removes the oldest.
+  At 83,000 alerts a day a zip is about 100 MB.
+
+With `IDS_ALERT_ARCHIVE_DAYS=0` the alerts past the limit are deleted
+instead. When the archive can't be written (a full disk, say), the alerts
+stay in the database, past its limit, until it can.
+
+To look inside:
+
+```bash
+unzip -l alert-archive/alerts_2026-11-03_to_2026-11-12.zip
+```
+
+```bash
+unzip -p alert-archive/alerts_2026-11-03_to_2026-11-12.zip 2026-11-05.jsonl | head -3
+```
+
+```bash
+zcat alert-archive/days/2026-11-13.jsonl.gz | head -3
+```
 
 ## Tests
 

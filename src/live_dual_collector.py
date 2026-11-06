@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ids.alert_archive import archive_old_alerts
 from ids.config import Settings, get_settings
 from ids.db import (
     connect_database,
@@ -120,6 +121,21 @@ def flush_pending(
     pending.processed_lines = 0
 
 
+def archive_summary(settings: Settings) -> str:
+    """Where the alerts past the database's limit go, for the startup lines."""
+    if not settings.alert_archive_days:
+        return (
+            f"off: alerts past the newest {settings.alert_retention} "
+            "are deleted"
+        )
+
+    return (
+        f"{settings.alert_archive_dir}, alerts past the newest "
+        f"{settings.alert_retention} for {settings.alert_archive_days} "
+        f"days in {settings.alert_archive_zip_days}-day zips"
+    )
+
+
 def run_periodic_retention(
     settings: Settings,
     last_retention: float,
@@ -135,11 +151,40 @@ def run_periodic_retention(
     conn = connect_database(settings.db_file)
 
     try:
-        prune_alerts(
-            conn,
-            settings.alert_retention,
-        )
+        if settings.alert_archive_days:
+            run = archive_old_alerts(
+                conn,
+                settings.alert_retention,
+                settings.alert_archive_dir,
+                days=settings.alert_archive_days,
+                zip_days=settings.alert_archive_zip_days,
+            )
+
+            for path in run.packed:
+                print(f"[ARCHIVE] packed {path}")
+
+            for path in run.removed:
+                print(
+                    f"[ARCHIVE] removed {path}, past "
+                    f"{settings.alert_archive_days} days"
+                )
+
+        else:
+            prune_alerts(
+                conn,
+                settings.alert_retention,
+            )
+
         conn.commit()
+
+    # A full disk, say: the alerts stay in the database, past its limit,
+    # until a later run can archive them.
+    except OSError as error:
+        print(
+            f"[!] alert archive: {error}; the alerts over "
+            f"{settings.alert_retention} stay in the database for now"
+        )
+
     finally:
         conn.close()
 
@@ -248,6 +293,9 @@ def run_collector(
         )
     print(
         f"State:            {settings.state_file}"
+    )
+    print(
+        f"Archive:          {archive_summary(settings)}"
     )
     print(
         f"Start at end:     {start_at_end}"

@@ -32,6 +32,17 @@ def test_the_engines_come_from_ids_engines_in_a_fixed_order(monkeypatch, tmp_pat
         _settings(monkeypatch, tmp_path, IDS_ENGINES=" , ")
 
 
+def test_the_alert_archive_keeps_30_days_in_10_day_zips_unless_set(monkeypatch, tmp_path):
+    settings = _settings(monkeypatch, tmp_path)
+    assert (settings.alert_archive_dir.name, settings.alert_archive_days, settings.alert_archive_zip_days) == (
+        "alert-archive", 30, 10,
+    )
+    # 0 days: the alerts past the limit are deleted, as before the archive.
+    assert _settings(monkeypatch, tmp_path, IDS_ALERT_ARCHIVE_DAYS="0").alert_archive_days == 0
+    with pytest.raises(ValueError, match="IDS_ALERT_ARCHIVE_ZIP_DAYS must be >= 1"):
+        _settings(monkeypatch, tmp_path, IDS_ALERT_ARCHIVE_ZIP_DAYS="0")
+
+
 def test_engine_sources_give_each_running_engines_files_and_rule_count(monkeypatch, tmp_path):
     counts = tmp_path / "engine_rule_counts.json"
     settings = _settings(

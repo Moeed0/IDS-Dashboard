@@ -146,11 +146,12 @@ function RuleTable({ rules }: { rules: TopRule[] }) {
 }
 
 /**
- * Each engine: whether it runs and how long ago its newest alert was, from
- * the status (it comes more often than the screen's data), with the times
- * counting on between answers and when none comes.
+ * Each engine, and the collector that stores their alerts: whether it runs
+ * and how long ago its newest alert was (the collector's: when it last
+ * stored alerts), from the status (it comes more often than the screen's
+ * data), with the times counting on between answers and when none comes.
  */
-function EngineCards({
+function StatusCards({
   engines,
   status,
 }: {
@@ -161,6 +162,8 @@ function EngineCards({
   const machineNow = machineTime(status, now) ?? now;
   const running = runningNow(status);
   const fresh = status.data?.engines ?? engines;
+  const saved = status.data?.collector_saved_ms ?? null;
+  const stored = saved !== null ? `${duration(machineNow - saved)} ago` : status.data ? "Nothing stored" : "Checking…";
   return (
     <div className="tiles">
       {byEngine(fresh).map(([engine, info]) => (
@@ -172,6 +175,12 @@ function EngineCards({
           details={[info.rules !== null ? `${count(info.rules)} rules` : ""]}
         />
       ))}
+      <Tile
+        label="Collector"
+        running={running ? running.collector : null}
+        value={stored}
+        details={["last stored alerts"]}
+      />
     </div>
   );
 }
@@ -236,8 +245,10 @@ export function Overview({
   const engines = options.engines;
   const both = engines.length > 1;
   // The chart's heading is the choice of what it shows, so it always says
-  // what is on the chart: the last 24 hours with a point every 5, 10 or 15
-  // minutes, or live.
+  // what is on the chart: alerts per 30 seconds over the last 15 minutes,
+  // moving with the clock, or per 5, 10 or 15 minutes over the last 24
+  // hours. The time axis shows the span, and "Live" is left to the status
+  // panel.
   const chartChoice = (
     <h2>
       <select
@@ -250,12 +261,12 @@ export function Overview({
           if (value !== "live") setStep(Number(value));
         }}
       >
+        <option value="live">{`Alerts per ${options.live_step_seconds} seconds`}</option>
         {options.chart_steps.map((minutes) => (
           <option key={minutes} value={minutes}>
-            {`Last 24 hours, alerts per ${minutes} minutes`}
+            {`Alerts per ${minutes} minutes`}
           </option>
         ))}
-        <option value="live">Live</option>
       </select>
     </h2>
   );
@@ -265,7 +276,7 @@ export function Overview({
       {error && <p className="error">{error}</p>}
       <section>
         <h2>Status</h2>
-        <EngineCards engines={data.engines} status={status} />
+        <StatusCards engines={data.engines} status={status} />
         {warnings}
       </section>
 

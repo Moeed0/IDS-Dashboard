@@ -250,32 +250,6 @@ main {
   font-size: 12px;
 }
 
-/* A program's dot: green while it runs, red when stopped, grey when not known. */
-.status-item.on .status-name::before,
-.status-item.off .status-name::before,
-.status-item.unknown .status-name::before {
-  content: "";
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-right: 6px;
-  vertical-align: middle;
-  background: var(--ok);
-}
-
-.status-item.off .status-name {
-  color: var(--error);
-}
-
-.status-item.off .status-name::before {
-  background: var(--error);
-}
-
-.status-item.unknown .status-name::before {
-  background: var(--muted);
-}
-
 nav {
   display: flex;
   gap: 4px;

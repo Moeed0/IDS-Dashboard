@@ -85,6 +85,16 @@ def _table_columns(
 
 
 def _create_tables(conn: sqlite3.Connection) -> None:
+    # The alert archive's day files and their sizes, recorded in the
+    # transaction that deletes their alerts (ids/alert_archive.py).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alert_archive_files (
+            name TEXT PRIMARY KEY,
+            size INTEGER NOT NULL
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS packets (

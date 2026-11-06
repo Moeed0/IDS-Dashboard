@@ -32,6 +32,8 @@ export interface Options {
   /** Minutes between the chart's points. */
   chart_steps: number[];
   default_chart_step: number;
+  /** Seconds between the live chart's points. */
+  live_step_seconds: number;
   /** One of export_lengths. */
   default_top_rules_length: string;
   time_zone: string;

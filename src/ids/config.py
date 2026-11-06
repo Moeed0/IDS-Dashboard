@@ -138,6 +138,12 @@ class Settings:
     batch_size: int
     batch_flush_ms: int
     retention_interval_seconds: int
+    # The alerts past alert_retention go to this folder, in zips of
+    # alert_archive_zip_days days kept for alert_archive_days; with 0 days
+    # they are deleted instead.
+    alert_archive_dir: Path
+    alert_archive_days: int
+    alert_archive_zip_days: int
     # The engines this machine runs (IDS_ENGINES), in KNOWN_ENGINES order.
     engines: tuple[str, ...]
     # Each engine's rules (one file, or a folder of .rules files) and its
@@ -200,6 +206,20 @@ def get_settings() -> Settings:
         retention_interval_seconds=_int_from_env(
             "IDS_RETENTION_INTERVAL_SECONDS",
             60,
+            minimum=1,
+        ),
+        alert_archive_dir=_path_from_env(
+            "IDS_ALERT_ARCHIVE_DIR",
+            "alert-archive",
+        ),
+        alert_archive_days=_int_from_env(
+            "IDS_ALERT_ARCHIVE_DAYS",
+            30,
+            minimum=0,
+        ),
+        alert_archive_zip_days=_int_from_env(
+            "IDS_ALERT_ARCHIVE_ZIP_DAYS",
+            10,
             minimum=1,
         ),
         engines=_engines_from_env(),

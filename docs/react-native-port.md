@@ -125,6 +125,7 @@ Until 5 November 2026 the rule counts and the engines' files were in
                  {"label": "All stored", "ms": null}],
  "page_sizes": [10, 25, 50, 100, 250],
  "chart_steps": [5, 10, 15], "default_chart_step": 15,
+ "live_step_seconds": 30,
  "default_top_rules_length": "1 day",
  "time_zone": "Asia/Karachi"}
 ```
@@ -158,10 +159,13 @@ What the screen shows:
 
 - **Status**: a tile for each engine with a green dot while it runs (red
   when stopped, grey when that is not known; `running` from `/status`), how
-  long ago its newest alert was and its `rules`. The tiles take these from
-  `/status`, which comes every 10 seconds, and from `engines` until it has
-  come; the "ago" times count on between answers, as in the status panel
-  (below). What is stored and HOME_NET are in the status panel.
+  long ago its newest alert was and its `rules`; then a Collector tile, its
+  dot and how long ago it last stored alerts (`collector_saved_ms`). The
+  tiles take these from `/status`, which comes every 10 seconds, and the
+  engines' from `engines` until it has come; the "ago" times count on
+  between answers, as in the status panel (below). What is stored and
+  HOME_NET are in the status panel. The Collector tile moved here from the
+  panel on 6 November 2026.
 - **Warnings**: an engine with no `newest_ms`, or one more than 30 minutes
   old: "No Snort alert stored for 2 h. Check Snort and
   live_dual_collector.py." An engine with `unmatched_lab_attackers`: its
@@ -175,11 +179,14 @@ What the screen shows:
   `#d95926` on a dark background (`#2a78d6` and `#eb6834` on a light one).
   `step_minutes` (5, 10 or 15; 15 when left out) sets the time between the
   points; the page keeps the user's choice in that browser. The chart's
-  heading is its dropdown, in the heading's type: "Last 24 hours, alerts per
-  5 minutes" (10, 15) or "Live", so it always says what the chart shows. Until
-  6 November 2026 the heading said "Last 24 hours" for every step, with a
-  small "Alerts per" dropdown beside it, and read like three time ranges that
-  all gave the same one. The lines are
+  heading is its dropdown, in the heading's type: "Alerts per 30 seconds"
+  (the live chart, `live_step_seconds` from `/options`), "Alerts per 5
+  minutes", "… 10 minutes" or "… 15 minutes". The time axis shows that the
+  first covers the last 15 minutes and the others the last 24 hours, and
+  "Live" is left to the status panel. Until 6 November 2026 the heading said
+  "Last 24 hours" for every step, with a small "Alerts per" dropdown beside
+  it that read like three time ranges, and the live choice was called
+  "Live". The lines are
   named at their ends, with no legend. The chart is small while each
   engine's counts stay near their usual level and grows by itself when a
   burst rises above it: from twice the engine's median count to six times,
@@ -189,8 +196,8 @@ What the screen shows:
   used), with the top line the first at or above the highest count:
   "0, 1,000, 2,000" or "0, 50, 100, 150". Until 6 November 2026 the lines
   were set fractions of the top, which gave counts like 62.5 and 187.5.
-- **Live**, the dropdown's fourth choice after the three 24-hour ones (also
-  kept in that browser). See "Live chart" below.
+- **The live chart**, the dropdown's first choice, before the three 24-hour
+  ones (also kept in that browser). See "Live chart" below.
 - **Top rules** (`null` likewise): each engine's most frequent rules over the
   last `top_rules_length` (one of the export lengths, `1 day` when left out),
   as a list (rule as `gid:sid:rev`, alerts, message), one line a rule like
@@ -205,7 +212,8 @@ export's.
 
 ### Live chart
 
-`GET /live`, every 5 seconds while the chart's Live choice is on:
+`GET /live`, every 5 seconds while the chart's live choice ("Alerts per 30
+seconds") is on:
 
 ```json
 {"checked_ms": 1793862463000, "window_ms": 900000,
@@ -231,8 +239,8 @@ The chart:
   redraws every second.
 - **Edges:** points that move past the left edge are cut off.
 - **Labels:** the time is labelled every 2 minutes, and the heading (the
-  chart's dropdown) says "Live" (it showed "Last 15 minutes" until 5 November
-  2026).
+  chart's dropdown) says "Alerts per 30 seconds". It said "Last 15 minutes"
+  until 5 November 2026 and "Live" until 6 November.
 - **Hover:** the hover box lists only the lines that reach that point.
 - **Height:** it grows on a burst as the 24-hour chart does.
 
@@ -259,11 +267,9 @@ Overview's.
 The panel shows at its top "Live"; "No new alerts" after 5 minutes without
 one stored; "Partly working" when an engine is stopped; "Not updating" when
 the collector is stopped or the latest `/status` request failed. Then the
-collector with a green or red dot and how long ago it stored alerts; the
-stored alerts (total, per engine, since when, how many are kept); and each
-engine's HOME_NET. Snort and Suricata,
-with their dots, are the Overview's first row. One `/status` request feeds
-both.
+stored alerts (total, per engine, since when, how many are kept) and each
+engine's HOME_NET. Snort, Suricata and the collector, with their dots, are
+the Overview's first row. One `/status` request feeds both.
 
 When the IDS machine or its API stops answering:
 

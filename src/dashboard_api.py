@@ -40,6 +40,7 @@ from ids.dashboard_data import (
     DEFAULT_CHART_STEP,
     DEFAULT_TOP_RULES_LENGTH,
     ENGINES,
+    LIVE_STEP,
     PAGE_SIZES,
     TIME_RANGES,
     alerts,
@@ -172,6 +173,7 @@ def create_app(
             "page_sizes": list(PAGE_SIZES),
             "chart_steps": list(CHART_STEPS),
             "default_chart_step": DEFAULT_CHART_STEP,
+            "live_step_seconds": int(LIVE_STEP.total_seconds()),
             "default_top_rules_length": DEFAULT_TOP_RULES_LENGTH,
             "time_zone": "Asia/Karachi",
         })

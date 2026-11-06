@@ -17,6 +17,9 @@ __pycache__/
 # Runtime state: the collector's places in the logs, the rule counts
 .runtime/
 
+# The alerts past the database's limit (IDS_ALERT_ARCHIVE_DIR)
+alert-archive/
+
 # Data built or downloaded on each machine (see data/README.md)
 data/intel/
 data/lab/rules/
