@@ -19,11 +19,16 @@ const PLOT_WIDTH = WIDTH - MARGIN.left - MARGIN.right;
 // Only one chart is on a screen.
 const CLIP_ID = "chart-plot";
 
-/** The axis top: the next 1, 2, 2.5 or 5 times a power of ten. */
-function axisTop(value: number): number {
-  const magnitude = 10 ** Math.floor(Math.log10(value));
+/**
+ * The count between grid lines: the smallest 1, 2, 2.5 or 5 times a power of
+ * ten for which `spaces` of them reach `value`. It is a whole number (25 but
+ * not 2.5), so every grid line is a whole count.
+ */
+function gridStep(value: number, spaces: number): number {
+  const needed = Math.max(1, value / spaces);
+  const magnitude = 10 ** Math.floor(Math.log10(needed));
   for (const step of [1, 2, 2.5, 5]) {
-    if (step * magnitude >= value) return step * magnitude;
+    if (Number.isInteger(step * magnitude) && step * magnitude >= needed) return step * magnitude;
   }
   return 10 * magnitude;
 }
@@ -59,9 +64,13 @@ export function LineChart({
   const timeAt = (index: number) => startMs + index * stepMs;
   const [from, to] = domain ?? [startMs, timeAt(Math.max(0, steps - 1))];
   const plotHeight = height - MARGIN.top - MARGIN.bottom;
-  // Fewer grid lines on a small chart.
-  const gridLines = plotHeight < 180 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
-  const top = axisTop(Math.max(1, ...series.flatMap((line) => line.values)));
+  // At most 3 grid lines on a small chart and 5 on a tall one; the top line
+  // is the first at or above the highest count.
+  const highest = Math.max(1, ...series.flatMap((line) => line.values));
+  const spacing = gridStep(highest, plotHeight < 180 ? 2 : 4);
+  const spaces = Math.ceil(highest / spacing);
+  const top = spaces * spacing;
+  const gridLines = Array.from({ length: spaces + 1 }, (_, index) => index * spacing);
   const x = (ms: number) => MARGIN.left + (to > from ? ((ms - from) / (to - from)) * PLOT_WIDTH : PLOT_WIDTH / 2);
   const y = (value: number) => MARGIN.top + plotHeight - (value / top) * plotHeight;
   const ticks: number[] = [];
@@ -104,17 +113,11 @@ export function LineChart({
             </clipPath>
           </defs>
         )}
-        {gridLines.map((fraction) => (
-          <g key={fraction}>
-            <line
-              className="grid"
-              x1={MARGIN.left}
-              x2={MARGIN.left + PLOT_WIDTH}
-              y1={y(fraction * top)}
-              y2={y(fraction * top)}
-            />
-            <text className="axis" x={MARGIN.left - 8} y={y(fraction * top)} textAnchor="end" dominantBaseline="middle">
-              {count(fraction * top)}
+        {gridLines.map((value) => (
+          <g key={value}>
+            <line className="grid" x1={MARGIN.left} x2={MARGIN.left + PLOT_WIDTH} y1={y(value)} y2={y(value)} />
+            <text className="axis" x={MARGIN.left - 8} y={y(value)} textAnchor="end" dominantBaseline="middle">
+              {count(value)}
             </text>
           </g>
         ))}

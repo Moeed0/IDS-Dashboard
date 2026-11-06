@@ -174,13 +174,23 @@ What the screen shows:
   `alerts[engine][i]` at `start_ms + i * step_ms`; Snort `#3987e5`, Suricata
   `#d95926` on a dark background (`#2a78d6` and `#eb6834` on a light one).
   `step_minutes` (5, 10 or 15; 15 when left out) sets the time between the
-  points; the page keeps the user's choice in that browser. The lines are
+  points; the page keeps the user's choice in that browser. The chart's
+  heading is its dropdown, in the heading's type: "Last 24 hours, alerts per
+  5 minutes" (10, 15) or "Live", so it always says what the chart shows. Until
+  6 November 2026 the heading said "Last 24 hours" for every step, with a
+  small "Alerts per" dropdown beside it, and read like three time ranges that
+  all gave the same one. The lines are
   named at their ends, with no legend. The chart is small while each
   engine's counts stay near their usual level and grows by itself when a
   burst rises above it: from twice the engine's median count to six times,
-  it goes from its small to its full height.
-- **Live**, the chart's fourth choice after 5, 10 and 15 minutes (also kept
-  in that browser). See "Live chart" below.
+  it goes from its small to its full height. The side axis has up to 3 grid
+  lines on the small chart and up to 5 on the tall one, a whole 1, 2, 2.5 or
+  5 times a power of ten apart (5, 10, 25, 50, 100, …; 2.5 itself is never
+  used), with the top line the first at or above the highest count:
+  "0, 1,000, 2,000" or "0, 50, 100, 150". Until 6 November 2026 the lines
+  were set fractions of the top, which gave counts like 62.5 and 187.5.
+- **Live**, the dropdown's fourth choice after the three 24-hour ones (also
+  kept in that browser). See "Live chart" below.
 - **Top rules** (`null` likewise): each engine's most frequent rules over the
   last `top_rules_length` (one of the export lengths, `1 day` when left out),
   as a list (rule as `gid:sid:rev`, alerts, message), one line a rule like
@@ -220,8 +230,9 @@ The chart:
   now, `checked_ms` plus the time since the answer came, and the chart
   redraws every second.
 - **Edges:** points that move past the left edge are cut off.
-- **Labels:** the time is labelled every 2 minutes, and the heading says
-  "Live" (it showed "Last 15 minutes" until 5 November 2026).
+- **Labels:** the time is labelled every 2 minutes, and the heading (the
+  chart's dropdown) says "Live" (it showed "Last 15 minutes" until 5 November
+  2026).
 - **Hover:** the hover box lists only the lines that reach that point.
 - **Height:** it grows on a burst as the 24-hour chart does.
 

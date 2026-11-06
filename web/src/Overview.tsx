@@ -65,10 +65,7 @@ function LiveSection({ choice, onUnauthorized }: { choice: ReactNode; onUnauthor
   const end = machineTime(live, now);
   return (
     <section>
-      <div className="section-head">
-        <h2>Live</h2>
-        {choice}
-      </div>
+      {choice}
       {error && <p className="error">{error}</p>}
       {data && end !== null && (
         <LineChart
@@ -238,12 +235,14 @@ export function Overview({
   // Snort, Suricata or both: the engines this machine runs.
   const engines = options.engines;
   const both = engines.length > 1;
-  // The chart's points: every 5, 10 or 15 minutes over the last 24 hours, or live.
+  // The chart's heading is the choice of what it shows, so it always says
+  // what is on the chart: the last 24 hours with a point every 5, 10 or 15
+  // minutes, or live.
   const chartChoice = (
-    <label>
-      {!live && "Alerts per"}
+    <h2>
       <select
-        aria-label={live ? "Chart" : undefined}
+        className="heading-choice"
+        aria-label="Chart"
         value={live ? "live" : step}
         onChange={(event) => {
           const value = event.target.value;
@@ -253,12 +252,12 @@ export function Overview({
       >
         {options.chart_steps.map((minutes) => (
           <option key={minutes} value={minutes}>
-            {minutes} minutes
+            {`Last 24 hours, alerts per ${minutes} minutes`}
           </option>
         ))}
         <option value="live">Live</option>
       </select>
-    </label>
+    </h2>
   );
 
   return (
@@ -307,10 +306,7 @@ export function Overview({
       ) : (
         day && (
           <section>
-            <div className="section-head">
-              <h2>Last 24 hours</h2>
-              {chartChoice}
-            </div>
+            {chartChoice}
             <LineChart
               startMs={day.start_ms}
               stepMs={day.step_ms}

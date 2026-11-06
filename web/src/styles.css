@@ -96,6 +96,14 @@ main p {
   padding: 2px 8px;
 }
 
+/* A dropdown that is the heading itself, in the heading's type, as wide as
+   the choice it shows where the browser can do that. */
+.heading-choice {
+  field-sizing: content;
+  max-width: 100%;
+  padding: 4px 10px;
+}
+
 code {
   font-size: 13px;
 }
