@@ -26,7 +26,9 @@ cd ~/Real-Time-Network-IDS-Dashboard/web && npm install && npm run build
 Then open `http://<IDS machine>:8501/`. The page asks once for the API token
 (`IDS_API_TOKEN` in `.env`) and keeps it in that browser. Rebuild after
 changing anything in `web/src`; the API picks up the new build on its next
-request. For development, `npm run dev` serves the page with live reload on
+request. It sends the page itself with `Cache-Control: no-cache`, so
+browsers check it again on every visit and show a new build at once (the
+scripts and styles get new names each build, so they can be kept). For development, `npm run dev` serves the page with live reload on
 port 5173 and passes the API paths to the API on port 8501.
 
 Node.js 22 (Ubuntu's `nodejs` and `npm` packages) builds it. `web/node_modules`
@@ -109,6 +111,7 @@ Until 5 November 2026 the rule counts and the engines' files were in
 | `GET /status` | `status(db_path, state_file)` | Whether the IDS stores alerts now, for the status panel |
 | `GET /live` | `live(db_path)` | The Overview's live chart: the last 15 minutes in 30-second steps |
 | `GET /alerts?engine=&range=&search=&page=&page_size=` | `alerts(db_path, …)` | One page of alerts, newest first |
+| `GET /rule-pairs` | `rule_pairs(db_path)` | The last hour's rules both engines fired on one packet, for the Alert Explorer |
 | `GET /export/window?length=&end_ms=` | `export_window(db_path, length, end_ms)` | Start and end of a combined export |
 | `GET /export?length=&end_ms=` | `combined_export(db_path, …)` | The combined JSON file for that window |
 
@@ -165,7 +168,8 @@ What the screen shows:
   EXTERNAL_NET keeps its rules from matching those lab attackers.
 - **Last hour** (`null` when no alert is stored): tiles for alerts per
   engine, packets with alerts, packets both engines alerted on (with their
-  share of the packets), and packets only one engine alerted on.
+  share of the packets), and packets only one engine alerted on. The rules
+  behind "Both engines" are in the Alert Explorer (`/rule-pairs`).
 - **Last 24 hours** (`null` likewise): a line chart, one line per engine, of
   `alerts[engine][i]` at `start_ms + i * step_ms`; Snort `#3987e5`, Suricata
   `#d95926` on a dark background (`#2a78d6` and `#eb6834` on a light one).
@@ -275,7 +279,7 @@ When the IDS machine or its API stops answering:
     {"id": 229839, "engine": "snort", "time_ms": 1793694999066, "rule": "112:1",
      "gid": 112, "sid": 1, "rev": 1,
      "message": "(arp_spoof) unicast ARP request", "class": null, "severity": 3,
-     "protocol": "ARP", "service": null, "src": null, "dst": null}
+     "protocol": "ARP", "service": null, "src": null, "dst": null, "both": false}
   ]
 }
 ```
@@ -296,12 +300,42 @@ When the IDS machine or its API stops answering:
   which the screens show as `gid:sid:rev`. `severity` is 1
   (most severe) to 4. `src` and `dst` are `address:port`, `[IPv6]:port`, the
   address alone (no ports), or `null` (no IP addresses, such as ARP).
-- Rows the dashboard shows: time, rule (`gid:sid:rev`, such as
-  `1:2009206:4`; `gid:sid` without a revision), severity, message (side by
-  side); time, engine, rule, severity, protocol, source, destination,
-  message (combined). Each row is one line, so that the
+- `both` is `true` when both engines alerted on the row's packet, matched
+  as for the Overview's "Both engines" among the alerts stored within a
+  millisecond of it; always `false` with one engine.
+- Rows the dashboard shows: time, both (a ✓; with both engines only), rule
+  (`gid:sid:rev`, such as `1:2009206:4`; `gid:sid` without a revision),
+  severity, message (side by side); time, engine, both, rule, severity,
+  protocol, source, destination, message (combined). Page 1 is fetched
+  again every 10 seconds; other pages stay as they are, so that their rows
+  don't move. The layout, time range and rows per page are kept in that
+  browser. Each row is one line, so that the
   two lists side by side line up: a message too long for its column ends in
   "…" and shows whole on hover.
+
+### Both engines: rule pairs
+
+Below the lists, with both engines, every 30 seconds: `GET /rule-pairs`.
+
+```json
+{
+  "start_ms": 1793952002000, "end_ms": 1793955602000,
+  "pairs": [
+    {"snort": {"gid": 116, "sid": 444, "rev": 1, "message": "(ipv4) IPv4 option set"},
+     "suricata": {"gid": 1, "sid": 2200007, "rev": 2, "message": "SURICATA IPv4 padding required"},
+     "packets": 273}
+  ]
+}
+```
+
+- The last hour up to the latest complete time, as the Overview's "Both
+  engines" counts it: up to 10 pairs of a Snort rule and a Suricata rule
+  that fired on one packet, with how many packets, the most first. A packet
+  with two rules of an engine counts for each of them.
+- The times are `null` before any alert is stored, and `pairs` is empty
+  with one engine.
+- The table shows each rule as `gid:sid:rev` with its message, then the
+  packets.
 
 ## Combined JSON export
 

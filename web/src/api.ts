@@ -57,6 +57,28 @@ export interface LastHour {
   suricata_only: number;
 }
 
+/** What /rule-pairs gives: the last hour's rule pairs, for the Alert Explorer. */
+export interface RulePairs {
+  /** null before any alert is stored. */
+  start_ms: number | null;
+  end_ms: number | null;
+  /** A Snort rule and a Suricata rule that fired on one packet, the most packets first. */
+  pairs: RulePair[];
+}
+
+export interface PairRule {
+  gid: number | null;
+  sid: number | null;
+  rev: number | null;
+  message: string;
+}
+
+export interface RulePair {
+  snort: PairRule;
+  suricata: PairRule;
+  packets: number;
+}
+
 export interface TopRule {
   rule: string;
   gid: number | null;
@@ -126,6 +148,8 @@ export interface AlertRow {
   service: string | null;
   src: string | null;
   dst: string | null;
+  /** Both engines alerted on its packet. */
+  both: boolean;
 }
 
 export interface AlertPage {

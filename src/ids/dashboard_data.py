@@ -22,6 +22,7 @@ from typing import Any
 from ids.combined_detections import (
     PKT,
     WINDOW_LENGTHS,
+    both_engine_alerts,
     build_combined_detections,
     combined_filename,
     complete_window_end,
@@ -52,6 +53,8 @@ LIVE_STEP = timedelta(seconds=30)
 # The top rules cover one of the export's window lengths.
 DEFAULT_TOP_RULES_LENGTH = "1 day"
 TOP_RULES = 10
+# The Alert Explorer's pairs of a Snort rule and a Suricata rule on one packet.
+RULE_PAIRS = 10
 # Where the status looks for Snort, Suricata and the collector.
 PROC_DIR = Path("/proc")
 # Time ranges of the alert list; None lists every stored alert.
@@ -342,7 +345,8 @@ def alerts(
     ``engine`` limits the list to one engine, ``since_ms`` to alerts from
     then on, and ``search`` to alerts whose message, rule, class, protocol,
     service, endpoints or PKT time contain it (any case). A page past the
-    last is the last page.
+    last is the last page. Each row says whether both engines alerted on
+    its packet (``both``), matched as in the combined export.
     """
     conditions, parameters = [], {}
     if engine:
@@ -378,6 +382,7 @@ def alerts(
             """,
             {**parameters, "limit": page_size, "offset": (page - 1) * page_size},
         ).fetchall()
+        both = _both_engine_ids(connection, rows, engines) if len(engines) > 1 else set()
     return {
         "total": total,
         "page": page,
@@ -400,6 +405,7 @@ def alerts(
                 "service": _known(service),
                 "src": _endpoint(src_addr, src_port),
                 "dst": _endpoint(dst_addr, dst_port),
+                "both": record_id in both,
             }
             for (
                 record_id, row_engine, event_ts_utc, gid, sid, rev, message, classification,
@@ -407,6 +413,53 @@ def alerts(
             ) in rows
         ],
     }
+
+
+def rule_pairs(db_path: Path | str, *, engines: Sequence[str] = ENGINES) -> dict[str, Any]:
+    """The Alert Explorer's "Both engines: rule pairs": over the last hour up
+    to the latest complete time (as the Overview's "Both engines" counts), up
+    to RULE_PAIRS of a Snort rule and a Suricata rule that fired on one
+    packet, with how many packets, the most first. The times are null before
+    any alert is stored; with one engine there are no pairs."""
+    end = complete_window_end(newest_event_times(db_path, engines))
+    if end is None:
+        return {"start_ms": None, "end_ms": None, "pairs": []}
+    start = end - LAST_HOUR
+    pairs = []
+    if len(engines) > 1:
+        pairs = packet_counts(
+            load_window_rows(db_path, start, end, engines),
+            window_start=start,
+            window_end=end,
+            rule_pairs=RULE_PAIRS,
+        )["pairs"]
+    return {"start_ms": _ms(start), "end_ms": _ms(end), "pairs": pairs}
+
+
+def _both_engine_ids(
+    connection: sqlite3.Connection, rows: Sequence[Sequence[Any]], engines: Sequence[str]
+) -> set[int]:
+    """The ids of the listed alerts (id, engine and time first) whose packet both
+    engines alerted on, matched among the alerts stored within a millisecond
+    of each: the stored times are in milliseconds, the engines' packet
+    times in their JSON to the microsecond."""
+    ranges: list[list[int]] = []
+    for time_ms in sorted({row[2] for row in rows if row[2] is not None}):
+        if ranges and time_ms - 1 <= ranges[-1][1]:
+            ranges[-1][1] = time_ms + 1
+        else:
+            ranges.append([time_ms - 1, time_ms + 1])
+    if not ranges:
+        return set()
+    # One range of the time index each (an engine IN (...) here would make
+    # SQLite read every alert of each engine instead).
+    near = connection.execute(
+        "SELECT id, engine, event_ts_utc, msg, rule_key, raw_json FROM alerts WHERE "
+        + " OR ".join("event_ts_utc BETWEEN ? AND ?" for _ in ranges),
+        [bound for time_range in ranges for bound in time_range],
+    ).fetchall()
+    columns = ("id", "engine", "event_ts_utc", "msg", "rule_key", "raw_json")
+    return both_engine_alerts(dict(zip(columns, row)) for row in near if row[1] in engines)
 
 
 def _running(proc_dir: Path, engines: Sequence[str] = ENGINES) -> dict[str, bool] | None:

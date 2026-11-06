@@ -1321,13 +1321,16 @@ def packet_counts(
     *,
     window_start: datetime,
     window_end: datetime,
+    rule_pairs: int = 0,
 ) -> dict[str, Any]:
     """The counts the combined document for this window gives, without
     building it: alerts per engine (an engine that raised none is left out),
     the packets they are on, and how many of those packets both engines,
-    only Snort or only Suricata alerted on."""
+    only Snort or only Suricata alerted on. With ``rule_pairs``, also that
+    many ``pairs``: a Snort rule and a Suricata rule that fired on one
+    packet, with how many packets, the most first."""
     packets = _packets(_window_matches(rows, window_start, window_end))
-    return {
+    counts: dict[str, Any] = {
         "alerts": _alert_counts(
             match for packet in packets for match in packet.matches
         ),
@@ -1336,6 +1339,53 @@ def packet_counts(
         "snort_only": sum(bool(packet.snort and not packet.suricata) for packet in packets),
         "suricata_only": sum(bool(packet.suricata and not packet.snort) for packet in packets),
     }
+    if rule_pairs:
+        counts["pairs"] = _rule_pairs(packets)[:rule_pairs]
+    return counts
+
+
+def _rule_pairs(packets: list[_Packet]) -> list[dict[str, Any]]:
+    """Each Snort rule and Suricata rule that fired on one packet, with how
+    many packets they did: the most first. A packet with two rules of an
+    engine counts for each of them."""
+    pairs: Counter[tuple[str, str]] = Counter()
+    rules: dict[str, dict[str, Any]] = {}
+    for packet in packets:
+        if not (packet.snort and packet.suricata):
+            continue
+        for match in packet.matches:
+            if match.rule_key not in rules:
+                numbers = [int(part) if part.isdigit() else None for part in match.rule_key.split(":")[1:4]]
+                gid, sid, rev = [*numbers, None, None, None][:3]
+                rules[match.rule_key] = {
+                    "gid": gid,
+                    "sid": sid,
+                    "rev": rev,
+                    "message": _message(match.engine, {}, match.native).strip(),
+                }
+        pairs.update(
+            (snort, suricata)
+            for snort in sorted({match.rule_key for match in packet.snort})
+            for suricata in sorted({match.rule_key for match in packet.suricata})
+        )
+    return [
+        {"snort": rules[snort], "suricata": rules[suricata], "packets": count}
+        for (snort, suricata), count in sorted(pairs.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def both_engine_alerts(rows: Iterable[Mapping[str, Any]]) -> set[Any]:
+    """The ``id`` of each row whose packet both engines alerted on, matched
+    as in the combined document. The rows must hold the other engine's
+    alerts near each row asked about: those within a millisecond of it."""
+    matches = [(row["id"], match) for row in rows if (match := _to_match(row)) is not None]
+    on_both = {
+        id(match)
+        for packet in _packets([match for _, match in matches])
+        if packet.snort and packet.suricata
+        for match in packet.matches
+    }
+    return {row_id for row_id, match in matches if id(match) in on_both}
 
 
 def build_combined_detections(

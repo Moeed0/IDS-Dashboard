@@ -6,10 +6,13 @@ import {
   engineNames,
   ruleName,
   useApi,
+  useRemembered,
   type AlertPage,
   type AlertRow,
   type Engine,
   type Options,
+  type RulePair,
+  type RulePairs,
 } from "./api";
 import { stamp } from "./time";
 
@@ -22,15 +25,23 @@ type Column = {
 };
 
 const TIME: Column = { title: "Time", value: (row) => stamp(row.time_ms), className: "time" };
+// Only when both engines run.
+const BOTH: Column = {
+  title: "Both",
+  value: (row) => (row.both ? "✓" : ""),
+  className: "both",
+  hint: "Both engines alerted on this packet",
+};
 const RULE: Column = { title: "Rule", value: ruleName, className: "rule", hint: "GID:SID:Rev" };
 const SEVERITY: Column = { title: "Severity", value: (row) => String(row.severity), className: "number" };
 // The message comes last and takes the width the others leave, on one line:
 // a longer one ends in "…" and shows whole on hover.
 const MESSAGE: Column = { title: "Message", value: (row) => row.message, className: "message" };
-const PANEL_COLUMNS = [TIME, RULE, SEVERITY, MESSAGE];
+const PANEL_COLUMNS = [TIME, BOTH, RULE, SEVERITY, MESSAGE];
 const TABLE_COLUMNS: Column[] = [
   TIME,
   { title: "Engine", value: (row) => NAMES[row.engine] ?? row.engine },
+  BOTH,
   RULE,
   SEVERITY,
   { title: "Protocol", value: (row) => row.protocol ?? "" },
@@ -49,11 +60,21 @@ function useDebounced<T>(value: T, delayMs: number): T {
 }
 
 export function AlertExplorer({ options, onUnauthorized }: { options: Options; onUnauthorized: () => void }) {
-  const [layout, setLayout] = useState<"side" | "combined">("side");
-  const [range, setRange] = useState(options.time_ranges[0]?.label ?? "");
+  // The layout, time range and rows per page are kept in this browser.
+  const [layout, setLayout] = useRemembered<"side" | "combined">("ids-explorer-layout", "side", ["side", "combined"]);
+  const [range, setRange] = useRemembered(
+    "ids-explorer-range",
+    options.time_ranges[0]?.label ?? "",
+    options.time_ranges.map((choice) => choice.label),
+  );
   const [search, setSearch] = useState("");
-  const [pageSize, setPageSize] = useState(options.page_sizes.includes(25) ? 25 : options.page_sizes[0]);
+  const [pageSize, setPageSize] = useRemembered(
+    "ids-explorer-page-size",
+    options.page_sizes.includes(25) ? 25 : options.page_sizes[0],
+    options.page_sizes,
+  );
   const settledSearch = useDebounced(search.trim(), 300);
+  const columns = (all: Column[]) => (options.engines.length > 1 ? all : all.filter((column) => column !== BOTH));
 
   // Back to the first page whenever a filter changes.
   const filters = JSON.stringify([layout, range, settledSearch, pageSize]);
@@ -111,7 +132,7 @@ export function AlertExplorer({ options, onUnauthorized }: { options: Options; o
               key={engine}
               engine={engine}
               title={NAMES[engine]}
-              columns={PANEL_COLUMNS}
+              columns={columns(PANEL_COLUMNS)}
               query={query}
               page={pages[engine] ?? 1}
               onPage={pageSetter(engine)}
@@ -122,7 +143,7 @@ export function AlertExplorer({ options, onUnauthorized }: { options: Options; o
       ) : (
         <AlertTable
           title={engineNames(options.engines)}
-          columns={TABLE_COLUMNS}
+          columns={columns(TABLE_COLUMNS)}
           query={query}
           page={pages.all ?? 1}
           onPage={pageSetter("all")}
@@ -130,10 +151,16 @@ export function AlertExplorer({ options, onUnauthorized }: { options: Options; o
         />
       )}
 
+      {options.engines.length > 1 && <RulePairSection onUnauthorized={onUnauthorized} />}
+
       <CombinedExport options={options} onUnauthorized={onUnauthorized} />
     </>
   );
 }
+
+// Page 1 holds the newest alerts and is fetched again this often. Other pages
+// stay as they are, so that their rows don't move while they are read.
+const NEWEST_REFRESH_MS = 10_000;
 
 function AlertTable({
   engine,
@@ -152,7 +179,12 @@ function AlertTable({
   onPage: (page: number) => void;
   onUnauthorized: () => void;
 }) {
-  const { data, error } = useApi<AlertPage>("/alerts", { ...query, engine, page }, onUnauthorized);
+  const { data, error } = useApi<AlertPage>(
+    "/alerts",
+    { ...query, engine, page },
+    onUnauthorized,
+    page === 1 ? NEWEST_REFRESH_MS : 0,
+  );
   const first = data ? (data.page - 1) * data.page_size + 1 : 0;
 
   return (
@@ -219,6 +251,64 @@ function AlertTable({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// As often as the Overview's last hour, which they explain.
+const PAIRS_REFRESH_MS = 30_000;
+
+/**
+ * The rules behind the Overview's "Both engines": over the last hour, a Snort
+ * rule and a Suricata rule that fired on one packet, with how many packets.
+ */
+function RulePairSection({ onUnauthorized }: { onUnauthorized: () => void }) {
+  const { data, error } = useApi<RulePairs>("/rule-pairs", {}, onUnauthorized, PAIRS_REFRESH_MS);
+  return (
+    <section>
+      <div className="section-head">
+        <h2>Both engines: rule pairs</h2>
+        <span className="muted">last hour</span>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {data && (data.pairs.length ? <PairTable pairs={data.pairs} /> : <p className="muted">None</p>)}
+    </section>
+  );
+}
+
+function PairTable({ pairs }: { pairs: RulePair[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="pairs">
+        <thead>
+          <tr>
+            <th className="rule" title="GID:SID:Rev">
+              Snort
+            </th>
+            <th>Message</th>
+            <th className="rule" title="GID:SID:Rev">
+              Suricata
+            </th>
+            <th>Message</th>
+            <th className="number alerts">Packets</th>
+          </tr>
+        </thead>
+        <tbody>
+          {pairs.map((pair) => (
+            <tr key={`${ruleName(pair.snort)} ${ruleName(pair.suricata)}`}>
+              <td className="rule">{ruleName(pair.snort)}</td>
+              <td className="message" title={pair.snort.message}>
+                {pair.snort.message}
+              </td>
+              <td className="rule">{ruleName(pair.suricata)}</td>
+              <td className="message" title={pair.suricata.message}>
+                {pair.suricata.message}
+              </td>
+              <td className="number">{count(pair.packets)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

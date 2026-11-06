@@ -14,6 +14,7 @@ from ids.extended_alert_intelligence import (
 )
 from ids.combined_detections import (
     PKT,
+    both_engine_alerts,
     build_combined_detections,
     combined_filename,
     complete_window_end,
@@ -322,6 +323,42 @@ def test_packet_counts_are_the_counts_of_the_combined_document():
     assert counts["both"] == sum("snort" in p and "suricata" in p for p in packets)
     assert counts["snort_only"] == sum("suricata" not in p for p in packets)
     assert counts["suricata_only"] == sum("snort" not in p for p in packets)
+
+
+def test_the_rules_both_engines_fired_on_one_packet_are_counted_in_pairs():
+    rows = [
+        _suricata_row(_suricata_native(timestamp="2026-10-15T15:54:02.661821+0500")),
+        _snort_row(),
+        _suricata_row(),
+        _igmp_row(),
+    ]
+
+    counts = packet_counts(rows, window_start=WINDOW_START, window_end=WINDOW_END, rule_pairs=10)
+
+    # Only the Shellshock request both engines alerted on.
+    assert counts["pairs"] == [{
+        "snort": {
+            "gid": 1, "sid": 31978, "rev": 5,
+            "message": "OS-OTHER Bash CGI environment variable injection attempt",
+        },
+        "suricata": {
+            "gid": 1, "sid": 2019232, "rev": 7,
+            "message": "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers",
+        },
+        "packets": 1,
+    }]
+
+
+def test_both_engine_alerts_are_the_rows_on_a_packet_both_engines_alerted_on():
+    rows = [
+        _suricata_row(_suricata_native(timestamp="2026-10-15T15:54:02.661821+0500")),
+        _snort_row(),
+        # Suricata's alert on the next packet, and Snort's on an IGMP query.
+        _suricata_row(),
+        _igmp_row(),
+    ]
+
+    assert both_engine_alerts({**row, "id": number} for number, row in enumerate(rows, 1)) == {1, 2}
 
 
 def test_alerts_on_different_packets_of_a_connection_are_separate_entries():

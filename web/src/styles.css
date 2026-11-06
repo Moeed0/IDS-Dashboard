@@ -484,6 +484,10 @@ td.rule {
   min-width: calc(7ch + 16px);
 }
 
+.both {
+  text-align: center;
+}
+
 /* The message takes the width the other columns leave, at least 120px (a
    narrower table scrolls), and ends in "…" when it is longer; hovering shows
    it whole. */
@@ -493,6 +497,11 @@ td.message {
   min-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The rule pairs' two messages share it. */
+.pairs td.message {
+  width: 50%;
 }
 
 .pager {

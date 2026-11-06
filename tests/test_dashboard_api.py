@@ -92,7 +92,9 @@ def test_every_endpoint_but_health_needs_the_token(db_path):
     app = _app(db_path)
 
     assert _get(app, "/health", token=None)[0] == 200
-    for path in ("/options", "/overview", "/status", "/live", "/alerts", "/export/window", "/export"):
+    for path in (
+        "/options", "/overview", "/status", "/live", "/alerts", "/rule-pairs", "/export/window", "/export",
+    ):
         status, headers, body = _get(app, path, token=None)
         assert (status, json.loads(body)) == (401, {"error": "missing or wrong token"})
         assert headers["www-authenticate"] == "Bearer"
@@ -111,7 +113,7 @@ def test_the_token_can_be_switched_off_for_testing(db_path, monkeypatch):
         db_path=db_path, ids_sources={}, token=None, rule_intelligence=None, web_dist=None,
     )
 
-    for path in ("/options", "/overview", "/status", "/live", "/alerts", "/export/window"):
+    for path in ("/options", "/overview", "/status", "/live", "/alerts", "/rule-pairs", "/export/window"):
         assert _get(app, path, token=None)[0] == 200
     # A browser that still sends an old token gets in too.
     assert _get(app, "/overview", token="old-token")[0] == 200
@@ -253,7 +255,11 @@ def test_the_built_react_page_is_served_at_the_root(db_path, tmp_path):
     status, headers, body = _get(app, "/", token=None)
     assert (status, headers["content-type"].split(";")[0]) == (200, "text/html")
     assert b"id=root" in body
-    assert _get(app, "/assets/index.js", token=None)[0] == 200
+    # Browsers check the page again on every visit, so a new build shows at
+    # once; its scripts get a new name each build, so they can be kept.
+    assert headers["cache-control"] == "no-cache"
+    status, headers, _ = _get(app, "/assets/index.js", token=None)
+    assert status == 200 and "cache-control" not in headers
     assert _get(app, "/missing.js", token=None)[0] == 404
     # The API's own paths still answer first, and still ask for the token.
     assert _get(app, "/overview", token=None)[0] == 401
@@ -313,6 +319,7 @@ def test_a_machine_running_one_engine_offers_only_that_engine(db_path):
     assert list(get("/overview")[1]["engines"]) == ["suricata"]
     assert list(get("/status")[1]["engines"]) == ["suricata"]
     assert list(get("/live")[1]["alerts"]) == ["suricata"]
+    assert get("/rule-pairs")[1]["pairs"] == []
     assert get("/alerts", engine="snort") == (400, {"error": "engine must be one of: suricata"})
     assert get("/alerts", range="All stored")[1]["total"] == 2
     # One second before Suricata's newest alert, not Snort's.

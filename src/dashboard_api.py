@@ -31,6 +31,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from ids.combined_detections import PKT, WINDOW_LENGTHS
 from ids.config import ENV_FILE, api_token_required, engine_sources, get_api_token, get_settings
@@ -47,6 +48,7 @@ from ids.dashboard_data import (
     live,
     offline_rule_intelligence,
     overview,
+    rule_pairs,
     status,
 )
 
@@ -61,6 +63,25 @@ EXPORT_HEADERS = (
 )
 # Letters and digits that cannot be taken for one another (no i, l, o or u).
 TOKEN_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+
+
+class PageFiles(StaticFiles):
+    """The built page. Its HTML says no-cache, so a browser checks it again on
+    every visit and a new build shows at once: each build deletes the old
+    scripts and styles, which have a new name every build (so they can be
+    kept)."""
+
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if os.fspath(full_path).endswith(".html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 class BadRequest(ValueError):
@@ -199,6 +220,9 @@ def create_app(
             engines=engines,
         ))
 
+    def rule_pair_list(request: Request) -> Response:
+        return JSONResponse(rule_pairs(db_path, engines=engines))
+
     def window(request: Request) -> dict[str, Any] | None:
         return export_window(
             db_path, _length(request), _int_param(request, "end_ms"), engines=engines,
@@ -240,13 +264,14 @@ def create_app(
         Route("/status", guarded(status_screen)),
         Route("/live", guarded(live_chart)),
         Route("/alerts", guarded(alert_list)),
+        Route("/rule-pairs", guarded(rule_pair_list)),
         Route("/export/window", guarded(export_window_screen)),
         Route("/export", guarded(export_file)),
     ]
     if web_dist is not None and (Path(web_dist) / "index.html").is_file():
         # Everything the routes above do not answer: the page and its files.
         # The page asks for the token itself, so its files need none.
-        routes.append(Mount("/", app=StaticFiles(directory=web_dist, html=True), name="web"))
+        routes.append(Mount("/", app=PageFiles(directory=web_dist, html=True), name="web"))
     return Starlette(
         routes=routes,
         # For the app in a web browser (Expo web); the token protects the data.

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from ids.combined_detections import PKT
-from ids.dashboard_data import alerts, combined_export, export_window, live, overview, status
+from ids.dashboard_data import alerts, combined_export, export_window, live, overview, rule_pairs, status
 
 
 def _ms(*parts):
@@ -27,11 +27,12 @@ def _database(path, alerts):
         "INSERT INTO alerts (engine, event_ts_utc, gid, sid, rev, msg, classification, "
         "severity, protocol, service, src_addr, src_port, dst_addr, dst_port, raw_json) "
         "VALUES (:engine, :time, :gid, :sid, :rev, :msg, :class, :severity, :protocol, "
-        ":service, :src_addr, :src_port, :dst_addr, :dst_port, '{}')",
+        ":service, :src_addr, :src_port, :dst_addr, :dst_port, :raw_json)",
         [
             {
                 "rev": 1, "class": None, "severity": 3, "protocol": None, "service": None,
                 "src_addr": None, "src_port": None, "dst_addr": None, "dst_port": None,
+                "raw_json": "{}",
                 **alert,
             }
             for alert in alerts
@@ -294,6 +295,7 @@ def test_alert_list_pages_newest_first(tmp_path):
         # IPv6 in its short form, with brackets before the port.
         "src": "[fe80::2d37:6cf4:f5c8:64f7]:5353",
         "dst": "[ff02::fb]:5353",
+        "both": False,
     }
     # "none" and "unknown" say nothing; an address without a port is alone.
     assert (snort["class"], snort["service"], snort["src"]) == (None, None, "192.168.50.122")
@@ -318,6 +320,70 @@ def test_alert_list_filters_by_engine_time_and_search(tmp_path):
     assert rules(search="12:40:08") == ["2030387"]
     assert rules(search="100%") == []
     assert alerts(db_path, search="nothing like this")["pages"] == 1
+
+
+DNS_SPOOF = "PROTOCOL-DNS SPOOF query response with TTL of 1 min. and no authority"
+DNS_REFUSED = "ET DNS Standard query response, Refused"
+
+
+def _one_packet_alerts():
+    """Snort's and Suricata's alerts on one DNS answer, and Snort's ARP check
+    in the same millisecond."""
+    second = _ms(2026, 11, 3, 12, 40, 8)
+    snort = {
+        "timestamp": "11/03-12:40:08.000100", "proto": "UDP",
+        "src_addr": "192.168.50.1", "src_port": 53, "dst_addr": "192.168.50.122", "dst_port": 50160,
+        "gid": 1, "sid": 254, "rev": 16, "msg": DNS_SPOOF,
+    }
+    # The same packet, 50 microseconds later by Suricata's clock.
+    suricata = {
+        "timestamp": "2026-11-03T12:40:08.000150+0500", "proto": "UDP",
+        "src_ip": "192.168.50.1", "src_port": 53, "dest_ip": "192.168.50.122", "dest_port": 50160,
+        "alert": {"gid": 1, "signature_id": 2001119, "rev": 6, "signature": DNS_REFUSED},
+    }
+    # Snort's ARP check has no IP addresses: never on one packet with Suricata's.
+    arp = {"timestamp": "11/03-12:40:08.000120", "proto": "ARP", "gid": 112, "sid": 1, "rev": 1}
+    return [
+        _alert("snort", second, 1, 254, DNS_SPOOF, raw_json=json.dumps(snort)),
+        _alert("suricata", second, 1, 2001119, DNS_REFUSED, raw_json=json.dumps(suricata)),
+        _alert("snort", second, 112, 1, "(arp_spoof) unicast ARP request", raw_json=json.dumps(arp)),
+    ]
+
+
+def test_alert_list_marks_the_alerts_both_engines_raised_on_one_packet(tmp_path):
+    db_path = tmp_path / "ids_live.db"
+    _database(db_path, _one_packet_alerts())
+
+    marks = {(row["engine"], row["sid"]): row["both"] for row in alerts(db_path)["rows"]}
+    assert marks == {("snort", 254): True, ("suricata", 2001119): True, ("snort", 1): False}
+    # Each engine's own list marks them the same way.
+    assert [row["both"] for row in alerts(db_path, engine="suricata")["rows"]] == [True]
+    # With one engine there is nothing to share a packet with.
+    assert not any(row["both"] for row in alerts(db_path, engines=("snort",))["rows"])
+
+
+def test_rule_pairs_are_the_last_hours_rules_on_one_packet(tmp_path):
+    db_path = tmp_path / "ids_live.db"
+    later = _ms(2026, 11, 3, 12, 45)
+    _database(db_path, [
+        *_one_packet_alerts(),
+        # Both engines' newest alerts: the last hour ends the second before.
+        _alert("snort", later, *IPV4_OPTION),
+        _alert("suricata", later, 1, 2200007, "SURICATA IPv4 padding required"),
+    ])
+
+    found = rule_pairs(db_path)
+
+    assert (found["start_ms"], found["end_ms"]) == (later - 3_601_000, later - 1_000)
+    assert found["pairs"] == [{
+        "snort": {"gid": 1, "sid": 254, "rev": 16, "message": DNS_SPOOF},
+        "suricata": {"gid": 1, "sid": 2001119, "rev": 6, "message": DNS_REFUSED},
+        "packets": 1,
+    }]
+    assert rule_pairs(db_path, engines=("snort",))["pairs"] == []
+    empty = tmp_path / "empty.db"
+    _database(empty, [])
+    assert rule_pairs(empty) == {"start_ms": None, "end_ms": None, "pairs": []}
 
 
 def test_alert_search_finds_a_rule_without_a_revision(tmp_path):
