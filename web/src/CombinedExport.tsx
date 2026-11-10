@@ -59,6 +59,12 @@ export function CombinedExport({ options, onUnauthorized }: { options: Options; 
   }
 
   const shown = built?.settings === settings ? built : null;
+  // More alerts than one export may hold: building them could run the IDS
+  // machine out of memory.
+  const tooMany =
+    exportWindow?.stored_alerts !== undefined &&
+    exportWindow.max_alerts !== undefined &&
+    exportWindow.stored_alerts > exportWindow.max_alerts;
   const engines = options.engines;
   const total = shown ? engines.reduce((sum, engine) => sum + shown.alerts[engine], 0) : 0;
 
@@ -97,9 +103,16 @@ export function CombinedExport({ options, onUnauthorized }: { options: Options; 
         <p className="muted">
           {stamp(exportWindow.start_ms)} → {stamp(exportWindow.end_ms)} PKT
           {exportWindow.moved_back && " · moved back to the latest complete time"}
+          {exportWindow.stored_alerts !== undefined && ` · ${count(exportWindow.stored_alerts)} alerts in the database`}
+          {exportWindow.from_archive && ", older ones from the archive"}
         </p>
       )}
-      <button type="button" className="primary" disabled={building || !exportWindow} onClick={build}>
+      {tooMany && exportWindow?.max_alerts !== undefined && (
+        <p className="error">
+          Too many alerts for one export: it holds at most {count(exportWindow.max_alerts)}. Choose a shorter length.
+        </p>
+      )}
+      <button type="button" className="primary" disabled={building || !exportWindow || tooMany} onClick={build}>
         {building ? "Building…" : "Build combined JSON"}
       </button>
       {buildError && <p className="error">{buildError}</p>}

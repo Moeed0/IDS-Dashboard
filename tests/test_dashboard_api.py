@@ -172,8 +172,10 @@ def test_the_status_says_what_runs_and_when_alerts_were_stored(db_path, tmp_path
     data = json.loads(body)
     assert set(data) == {
         "checked_ms", "running", "collector_saved_ms", "complete_end_ms", "alert_retention",
-        "engines",
+        "engines", "capture",
     }
+    # No statistics files given.
+    assert data["capture"] == {}
     assert data["collector_saved_ms"] == int(state_file.stat().st_mtime * 1000)
     assert data["engines"] == overview(db_path, {})["engines"]
 
@@ -183,7 +185,8 @@ def test_the_live_chart_ends_now(db_path):
 
     assert status == 200
     data = json.loads(body)
-    assert set(data) == {"checked_ms", "window_ms", "start_ms", "step_ms", "alerts"}
+    assert set(data) == {"checked_ms", "window_ms", "start_ms", "step_ms", "alerts", "off"}
+    assert data["off"] == []
     assert abs(data["checked_ms"] - time.time() * 1000) < 60_000
     assert (data["window_ms"], data["step_ms"]) == (900_000, 30_000)
     assert data["start_ms"] <= data["checked_ms"] - data["window_ms"]
@@ -325,3 +328,81 @@ def test_a_machine_running_one_engine_offers_only_that_engine(db_path):
     assert get("/alerts", range="All stored")[1]["total"] == 2
     # One second before Suricata's newest alert, not Snort's.
     assert get("/export/window", length="1 hour")[1]["end_ms"] == _ms(2026, 11, 3, 12, 40, 7)
+
+
+def test_the_archive_is_listed_and_only_its_files_downloaded(db_path, tmp_path):
+    archive = tmp_path / "archive"
+    (archive / "days").mkdir(parents=True)
+    (archive / "alerts_2026-11-03_to_2026-11-12.zip").write_bytes(b"zip bytes")
+    (archive / "days" / "2026-11-13.jsonl.gz").write_bytes(b"gz bytes")
+    (archive / "secret.txt").write_text("not for download")
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        archive_dir=archive, archive_settings={"keep_days": 30, "zip_days": 10},
+    )
+
+    status, _, body = _get(app, "/archive")
+    assert status == 200
+    assert json.loads(body) == {
+        "zips": [{
+            "name": "alerts_2026-11-03_to_2026-11-12.zip", "first_day": "2026-11-03",
+            "last_day": "2026-11-12", "bytes": 9,
+        }],
+        "days": [{"name": "2026-11-13.jsonl.gz", "day": "2026-11-13", "bytes": 8}],
+        "keep_days": 30,
+        "zip_days": 10,
+    }
+
+    status, headers, body = _get(app, "/archive/alerts_2026-11-03_to_2026-11-12.zip")
+    assert (status, body) == (200, b"zip bytes")
+    assert 'filename="alerts_2026-11-03_to_2026-11-12.zip"' in headers["content-disposition"]
+    assert _get(app, "/archive/2026-11-13.jsonl.gz")[2] == b"gz bytes"
+    for path in ("/archive/secret.txt", "/archive/..%2Fsecret.txt", "/archive/../secret.txt",
+                 "/archive/2026-11-12.jsonl.gz"):
+        assert _get(app, path)[0] == 404
+    assert _get(app, "/archive", token=None)[0] == 401
+    # Without an archive (0 archive days), nothing is listed.
+    assert json.loads(_get(_app(db_path), "/archive")[2]) == {"zips": [], "days": []}
+
+
+def test_an_export_over_its_limit_is_refused_with_why(tmp_path):
+    db_path = tmp_path / "ids_live.db"
+    _database(db_path, [
+        ("suricata", _ms(2026, 11, 3, 12, 38, 0), 1, 2200007, "SURICATA IPv4 padding required"),
+        ("suricata", _ms(2026, 11, 3, 12, 38, 30), 1, 2200007, "SURICATA IPv4 padding required"),
+        # The newest alerts, which set the latest complete time at 12:40:59.
+        ("suricata", _ms(2026, 11, 3, 12, 41, 0), 1, 2200007, "SURICATA IPv4 padding required"),
+        ("snort", _ms(2026, 11, 3, 12, 41, 30), 116, 444, "(ipv4) IPv4 option set"),
+    ])
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        export_max_alerts=1,
+    )
+
+    window = json.loads(_get(app, "/export/window", length="30 minutes")[2])
+    status, _, body = _get(app, "/export", length="30 minutes")
+
+    assert (window["stored_alerts"], window["max_alerts"]) == (2, 1)
+    assert status == 413
+    assert json.loads(body)["error"].startswith("This window holds 2 alerts; one export holds at most 1")
+
+
+def test_the_charts_show_when_the_machine_was_off(db_path):
+    off = [(_ms(2026, 11, 3, 12, 0), _ms(2026, 11, 3, 12, 30))]
+    reads = []
+
+    def off_periods():
+        reads.append(1)
+        return off
+
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        off_periods=off_periods,
+    )
+
+    day = json.loads(_get(app, "/overview")[2])["last_day"]
+    _get(app, "/overview")
+
+    assert day["off"] == [[_ms(2026, 11, 3, 12, 0), _ms(2026, 11, 3, 12, 30)]]
+    # The past boots are read once.
+    assert reads == [1]

@@ -22,19 +22,24 @@ import gzip
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import zipfile
+import zlib
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 from zoneinfo import ZoneInfo
 
 # Days run in the dashboard's time zone.
 PKT = ZoneInfo("Asia/Karachi")
 DAY_FOLDER = "days"
 DAY_SUFFIX = ".jsonl.gz"
+ZIP_NAME = re.compile(r"^alerts_(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})(?:_\d+)?\.zip$")
+DAY_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})\.jsonl\.gz$")
 # Periods count from this day, so a period's days don't depend on when the
 # archive started.
 EPOCH = date(1970, 1, 1)
@@ -280,3 +285,136 @@ def _sync_folder(folder: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+class TooManyAlerts(ValueError):
+    """A window with more alerts than one export may hold."""
+
+    def __init__(self, found: int | None, limit: int):
+        self.found = found
+        self.limit = limit
+        held = f"{found:,} alerts" if found is not None else f"more than {limit:,} alerts"
+        super().__init__(
+            f"This window holds {held}; one export holds at most {limit:,} on this "
+            "machine. Choose a shorter length."
+        )
+
+
+def archive_contents(folder: Path | str) -> dict[str, Any]:
+    """The archive's zips and the day files waiting for theirs, oldest
+    first, for the screens."""
+    zips = []
+    days = []
+
+    for path in sorted(Path(folder).glob("alerts_*_to_*.zip")):
+        found = ZIP_NAME.match(path.name)
+
+        try:
+            if found:
+                zips.append({
+                    "name": path.name,
+                    "first_day": found[1],
+                    "last_day": found[2],
+                    "bytes": path.stat().st_size,
+                })
+        except OSError:
+            # Removed meanwhile, by a newer zip.
+            continue
+
+    for path in sorted((Path(folder) / DAY_FOLDER).glob(f"*{DAY_SUFFIX}")):
+        found = DAY_NAME.match(path.name)
+
+        try:
+            if found:
+                days.append({"name": path.name, "day": found[1], "bytes": path.stat().st_size})
+        except OSError:
+            # Packed into a zip meanwhile.
+            continue
+
+    return {"zips": zips, "days": days}
+
+
+def archive_file(folder: Path | str, name: str) -> Path | None:
+    """The zip or day file with this name, for a download; None for any
+    other name, so nothing outside the archive can be asked for."""
+    if ZIP_NAME.match(name):
+        path = Path(folder) / name
+    elif DAY_NAME.match(name):
+        path = Path(folder) / DAY_FOLDER / name
+    else:
+        return None
+
+    return path if path.is_file() else None
+
+
+def archived_alerts(
+    folder: Path | str,
+    start_ms: int,
+    end_ms: int,
+    engines: Sequence[str],
+    *,
+    limit: int | None = None,
+    fields: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    The archived alerts of the ``engines`` from ``start_ms`` to ``end_ms``
+    (a millisecond more on each side, as the database query has), oldest
+    first, as the rows the database had (only ``fields`` of them, when
+    given). More than ``limit`` raises TooManyAlerts.
+    """
+    first_day = _day(start_ms, date.today())
+    wanted = {
+        str(first_day + timedelta(days=offset))
+        for offset in range((_day(end_ms, date.today()) - first_day).days + 1)
+    }
+    alerts: list[dict[str, Any]] = []
+
+    for lines in _day_sources(Path(folder), wanted):
+        try:
+            for line in lines:
+                alert = json.loads(line)
+                at_ms = alert.get("event_ts_utc")
+
+                if (
+                    alert.get("engine") not in engines
+                    or at_ms is None
+                    or not start_ms - 1 <= at_ms <= end_ms + 1
+                ):
+                    continue
+
+                alerts.append({name: alert.get(name) for name in fields} if fields else alert)
+
+                if limit is not None and len(alerts) > limit:
+                    raise TooManyAlerts(None, limit)
+
+        # The end of a day file the collector is writing: its alerts are
+        # still in the database.
+        except (EOFError, gzip.BadGzipFile, zlib.error):
+            continue
+
+    alerts.sort(key=lambda alert: (alert["event_ts_utc"], alert.get("id") or 0))
+    return alerts
+
+
+def _day_sources(folder: Path, wanted: set[str]) -> Iterator[Iterator[bytes]]:
+    """The lines of each day file and each zip's day in ``wanted``."""
+    for path in sorted((folder / DAY_FOLDER).glob(f"*{DAY_SUFFIX}")):
+        if path.name.removesuffix(DAY_SUFFIX) in wanted:
+            try:
+                with gzip.open(path, "rb") as lines:
+                    yield lines
+            except FileNotFoundError:
+                # Packed into a zip meanwhile; read there below.
+                continue
+
+    for path in sorted(folder.glob("alerts_*_to_*.zip")):
+        found = ZIP_NAME.match(path.name)
+
+        if not found or not any(found[1] <= day <= found[2] for day in wanted):
+            continue
+
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.namelist():
+                if member.removesuffix(".jsonl") in wanted:
+                    with archive.open(member) as lines:
+                        yield lines

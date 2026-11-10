@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ids.alert_archive import archive_old_alerts
+from ids.alert_archive import (
+    TooManyAlerts,
+    archive_contents,
+    archive_file,
+    archive_old_alerts,
+    archived_alerts,
+)
 from ids.db import connect_database, insert_alert_batch
 from ids.schema import ensure_schema
 
@@ -20,11 +26,11 @@ def _ms(text):
     return int(datetime.fromisoformat(text).timestamp() * 1000)
 
 
-def _add(conn, times, first=1):
+def _add(conn, times, first=1, engine="suricata"):
     """An alert at each time, numbered from ``first``, oldest id first."""
     insert_alert_batch(conn, [
         {
-            "engine": "suricata",
+            "engine": engine,
             "event_ts_utc": _ms(time),
             "msg": f"alert {number}",
             "gid": 1,
@@ -217,3 +223,71 @@ def test_only_the_zips_of_the_newest_periods_the_archive_days_cover_stay(tmp_pat
     assert sorted(path.name for path in folder.glob("*.zip")) == names[2:]
     # 25 days still keep whole zips: 3.
     assert _archive(conn, 10, folder, days=25).removed == []
+
+
+def test_the_archive_lists_its_zips_and_day_files_and_hands_out_only_those(tmp_path):
+    conn = _database(tmp_path, [
+        "2026-11-03T08:00:00+05:00",
+        "2026-11-04T08:00:00+05:00",
+        "2026-11-13T08:00:00+05:00",
+        "2026-11-14T08:00:00+05:00",
+    ])
+    folder = tmp_path / "archive"
+    _archive(conn, 1, folder)
+    zipped = folder / "alerts_2026-11-03_to_2026-11-12.zip"
+    day_file = folder / "days" / "2026-11-13.jsonl.gz"
+
+    assert archive_contents(folder) == {
+        "zips": [{
+            "name": zipped.name, "first_day": "2026-11-03", "last_day": "2026-11-12",
+            "bytes": zipped.stat().st_size,
+        }],
+        "days": [{"name": day_file.name, "day": "2026-11-13", "bytes": day_file.stat().st_size}],
+    }
+    assert archive_file(folder, zipped.name) == zipped
+    assert archive_file(folder, day_file.name) == day_file
+    for name in ("../ids.db", "days/2026-11-13.jsonl.gz", "2026-11-12.jsonl.gz", ".env"):
+        assert archive_file(folder, name) is None
+    assert archive_contents(tmp_path / "none") == {"zips": [], "days": []}
+
+
+def test_a_windows_archived_alerts_come_from_the_zips_and_the_day_files(tmp_path):
+    conn = _database(tmp_path, [
+        "2026-11-12T23:00:00+05:00",
+        "2026-11-13T01:00:00+05:00",
+        "2026-11-13T02:00:00+05:00",
+    ])
+    _add(conn, ["2026-11-13T00:30:00+05:00"], first=4, engine="snort")
+    _add(conn, ["2026-11-14T08:00:00+05:00"], first=5)
+    folder = tmp_path / "archive"
+    # 12 November is zipped (its period ended on that day), 13 November waits.
+    assert _archive(conn, 1, folder).packed == [folder / "alerts_2026-11-03_to_2026-11-12.zip"]
+
+    start, end = _ms("2026-11-12T22:00:00+05:00"), _ms("2026-11-13T01:30:00+05:00")
+    found = archived_alerts(folder, start, end, ["suricata"], fields=("id", "msg", "event_ts_utc"))
+
+    assert found == [
+        {"id": 1, "msg": "alert 1", "event_ts_utc": _ms("2026-11-12T23:00:00+05:00")},
+        {"id": 2, "msg": "alert 2", "event_ts_utc": _ms("2026-11-13T01:00:00+05:00")},
+    ]
+    assert [alert["msg"] for alert in archived_alerts(folder, start, end, ["snort", "suricata"])] == [
+        "alert 1", "alert 4", "alert 2",
+    ]
+    with pytest.raises(TooManyAlerts, match="more than 1 alerts"):
+        archived_alerts(folder, start, end, ["suricata"], limit=1)
+
+
+def test_a_day_file_being_written_gives_the_alerts_before_its_end(tmp_path):
+    conn = _database(tmp_path, ["2026-11-13T01:00:00+05:00", "2026-11-13T02:00:00+05:00"])
+    folder = tmp_path / "archive"
+    _archive(conn, 1, folder)
+    _add(conn, ["2026-11-13T03:00:00+05:00"], first=3)
+    _archive(conn, 1, folder)
+    day_file = folder / "days" / "2026-11-13.jsonl.gz"
+    # The second minute's member, cut off half way.
+    with day_file.open("r+b") as file:
+        file.truncate(day_file.stat().st_size - 12)
+
+    found = archived_alerts(folder, 0, _ms("2026-11-14T00:00:00+05:00"), ["suricata"])
+
+    assert found[0]["msg"] == "alert 1"

@@ -112,6 +112,7 @@ def test_overview_counts_end_where_both_engines_are_complete(tmp_path):
     assert data["last_hour"] == {
         "start_ms": end - 3_600_000,
         "end_ms": end,
+        "off": [],
         "alerts": {"snort": 3, "suricata": 1},
         "packets": 4,
         "both": 0,
@@ -503,6 +504,7 @@ def test_export_window_ends_at_the_latest_complete_time(tmp_path):
     assert window == {
         "start_ms": complete - 900_000, "end_ms": complete,
         "complete_end_ms": complete, "moved_back": False,
+        "stored_alerts": window["stored_alerts"], "max_alerts": 150_000, "from_archive": False,
     }
     assert (chosen["start_ms"], chosen["end_ms"], chosen["moved_back"]) == (
         _ms(2026, 11, 3, 12, 25), _ms(2026, 11, 3, 12, 30), False,
@@ -561,3 +563,95 @@ def test_a_machine_running_one_engine_shows_only_that_engine(tmp_path):
     assert listed["total"] == 2
     assert {row["engine"] for row in listed["rows"]} == {"suricata"}
     assert exported["alerts"] == {"suricata": 1}
+
+
+def _schema_database(path, times):
+    """A database as the collector makes it, a Suricata alert at each time."""
+    from ids.db import connect_database, insert_alert_batch
+    from ids.schema import ensure_schema
+
+    connection = connect_database(path)
+    ensure_schema(connection)
+    insert_alert_batch(connection, [
+        {
+            "engine": "suricata", "event_ts_utc": at, "gid": 1, "sid": 2200007, "rev": 2,
+            "msg": "SURICATA IPv4 padding required", "rule_key": "suricata:1:2200007:2",
+            "raw_json": "{}", "event_hash": f"hash-{number}",
+        }
+        for number, at in enumerate(times)
+    ])
+    return connection
+
+
+def test_an_export_takes_the_alerts_that_left_the_database_from_the_archive(tmp_path):
+    from ids.alert_archive import archive_old_alerts
+
+    db_path = tmp_path / "ids.db"
+    times = [_ms(2026, 11, 13, 10, minute) for minute in (1, 2, 3, 4)]
+    connection = _schema_database(db_path, times)
+    archive = tmp_path / "archive"
+    archive_old_alerts(connection, 2, archive, days=30, zip_days=10)
+    connection.close()
+    start, end = _ms(2026, 11, 13, 10, 0), _ms(2026, 11, 13, 10, 5)
+
+    window = export_window(db_path, "5 minutes", end, archive_dir=archive)
+    built = combined_export(db_path, start, end, "5 minutes", rule_intelligence=None, archive_dir=archive)
+
+    # The window ends at the latest complete time, just before the 10:04
+    # alert: of the database's two, it holds the 10:03 one.
+    assert (window["stored_alerts"], window["from_archive"]) == (1, True)
+    # Two from the archive, two from the database.
+    assert built["alerts"] == {"suricata": 4}
+    assert combined_export(db_path, start, end, "5 minutes", rule_intelligence=None)["alerts"] == {
+        "suricata": 2,
+    }
+
+
+def test_an_export_with_more_alerts_than_it_may_hold_is_refused_before_it_is_built(tmp_path):
+    from ids.alert_archive import TooManyAlerts, archive_old_alerts
+
+    db_path = tmp_path / "ids.db"
+    connection = _schema_database(db_path, [_ms(2026, 11, 13, 10, minute) for minute in (1, 2, 3, 4)])
+    start, end = _ms(2026, 11, 13, 10, 0), _ms(2026, 11, 13, 10, 5)
+
+    with pytest.raises(TooManyAlerts, match="holds 4 alerts; one export holds at most 3"):
+        combined_export(db_path, start, end, "5 minutes", rule_intelligence=None, max_alerts=3)
+
+    # Over the limit only with the archive's alerts.
+    archive = tmp_path / "archive"
+    archive_old_alerts(connection, 2, archive, days=30, zip_days=10)
+    connection.close()
+    with pytest.raises(TooManyAlerts, match="more than 3 alerts"):
+        combined_export(
+            db_path, start, end, "5 minutes", rule_intelligence=None, archive_dir=archive, max_alerts=3,
+        )
+
+
+def test_the_charts_get_the_times_the_machine_was_off_that_overlap_them(tmp_path):
+    path = tmp_path / "ids.db"
+    end_time = _ms(2026, 11, 10, 12, 0)
+    _database(path, [_alert("snort", end_time, *IPV4_OPTION), _alert("suricata", end_time, *PADDING)])
+    off = [(_ms(2026, 11, 7, 17, 47), _ms(2026, 11, 10, 11, 21))]
+
+    data = overview(path, {}, off_periods=off)
+
+    # Whole, though each began before the window.
+    whole = [[_ms(2026, 11, 7, 17, 47), _ms(2026, 11, 10, 11, 21)]]
+    assert data["last_day"]["off"] == whole
+    assert data["last_hour"]["off"] == whole
+    assert live(path, now=datetime(2026, 11, 10, 11, 25, tzinfo=PKT), off_periods=off)["off"] == whole
+    assert live(path, now=datetime(2026, 11, 10, 12, 0, tzinfo=PKT), off_periods=off)["off"] == []
+
+
+def test_the_status_gives_each_engines_drops_from_its_statistics(tmp_path):
+    path = tmp_path / "ids.db"
+    _database(path, [])
+    perf = tmp_path / "perf_monitor_base.csv"
+    perf.write_text(f"#timestamp,daq.received,daq.dropped\n{int(time.time()) - 30},40,1\n")
+
+    capture = status(
+        path, None, {}, proc_dir=tmp_path,
+        stats_files={"snort": perf, "suricata": tmp_path / "missing.log"},
+    )["capture"]
+
+    assert capture == {"snort": {"packets": 40, "dropped": 1, "minutes": 1}, "suricata": None}

@@ -144,6 +144,12 @@ class Settings:
     alert_archive_dir: Path
     alert_archive_days: int
     alert_archive_zip_days: int
+    # The statistics the engines write every minute, for their dropped
+    # packets: Snort's perf_monitor CSV and Suricata's stats.log.
+    snort_perf_file: Path
+    suricata_stats_file: Path
+    # The most alerts one combined export holds (memory: about 8 KB each).
+    export_max_alerts: int
     # The engines this machine runs (IDS_ENGINES), in KNOWN_ENGINES order.
     engines: tuple[str, ...]
     # Each engine's rules (one file, or a folder of .rules files) and its
@@ -154,6 +160,10 @@ class Settings:
     suricata_config: Path
     # How many rules each engine loaded, as the last rule update saw it.
     rule_counts_file: Path
+    # The basic rules both engines share (deploy/rules/local.rules), which
+    # the rule index adds to each engine's own; None (IDS_LOCAL_RULES empty)
+    # on a machine whose engines load none.
+    local_rules: Path | None
 
 
 def get_settings() -> Settings:
@@ -222,6 +232,19 @@ def get_settings() -> Settings:
             10,
             minimum=1,
         ),
+        snort_perf_file=_path_from_env(
+            "IDS_SNORT_PERF_FILE",
+            "/var/log/snort/perf_monitor_base.csv",
+        ),
+        suricata_stats_file=_path_from_env(
+            "IDS_SURICATA_STATS_FILE",
+            "/var/log/suricata/stats.log",
+        ),
+        export_max_alerts=_int_from_env(
+            "IDS_EXPORT_MAX_ALERTS",
+            150000,
+            minimum=1,
+        ),
         engines=_engines_from_env(),
         snort_rules=_path_from_env(
             "IDS_SNORT_RULES",
@@ -242,6 +265,11 @@ def get_settings() -> Settings:
         rule_counts_file=_path_from_env(
             "IDS_RULE_COUNTS_FILE",
             ".runtime/engine_rule_counts.json",
+        ),
+        local_rules=(
+            _path_from_env("IDS_LOCAL_RULES", "deploy/rules/local.rules")
+            if _value_from_env("IDS_LOCAL_RULES", "deploy/rules/local.rules").strip()
+            else None
         ),
     )
 
@@ -284,8 +312,9 @@ def write_rule_counts(path: Path | str, counts: Mapping[str, int]) -> None:
 
 
 def engine_sources(settings: Settings) -> dict[str, dict[str, Any]]:
-    """For each engine this machine runs: its rules, its config file and how
-    many rules it loaded (None until a rule update saves the count)."""
+    """For each engine this machine runs: its rules, the local rules both
+    engines share, its config file and how many rules it loaded (None until
+    a rule update saves the count)."""
     counts = read_rule_counts(settings.rule_counts_file)
     paths = {
         "snort": (settings.snort_rules, settings.snort_config),
@@ -294,6 +323,7 @@ def engine_sources(settings: Settings) -> dict[str, dict[str, Any]]:
     return {
         engine: {
             "rules": str(paths[engine][0]),
+            "local_rules": str(settings.local_rules) if settings.local_rules else None,
             "config_file": str(paths[engine][1]),
             "engine_rule_count": counts.get(engine),
         }

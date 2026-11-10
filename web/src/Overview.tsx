@@ -13,13 +13,14 @@ import {
   type EngineStatus,
   type Fetched,
   type LiveData,
+  type OffPeriod,
   type Options,
   type OverviewData,
   type Status,
   type TopRule,
 } from "./api";
 import { LineChart } from "./LineChart";
-import { duration, minuteLabel } from "./time";
+import { dayTime, duration, minuteLabel } from "./time";
 
 // The engines store alerts several times a minute on the lab network, so
 // this long without one is worth a warning.
@@ -74,11 +75,13 @@ function LiveSection({ choice, onUnauthorized }: { choice: ReactNode; onUnauthor
           domain={[end - data.window_ms, end]}
           tickEveryMs={LIVE_TICK_MS}
           tickLabel={minuteLabel}
+          off={data.off}
           height={chartHeight(byEngine(data.alerts).map(([, values]) => values))}
           yLabel={`Alerts per ${data.step_ms / 1000} seconds`}
           series={engineLines(data.alerts)}
         />
       )}
+      {data && <OffNote off={data.off} />}
     </section>
   );
 }
@@ -116,7 +119,28 @@ export function Tile({
   );
 }
 
-function RuleTable({ rules }: { rules: TopRule[] }) {
+/** 65.6 h, or 24 min under an hour. */
+function offLength(ms: number): string {
+  return ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(1)} h` : duration(ms);
+}
+
+/** Under a chart: each time the machine was off, whole, as the chart shades it. */
+function OffNote({ off = [] }: { off?: OffPeriod[] }) {
+  if (!off.length) return null;
+  return (
+    <p className="muted off-note">
+      Machine off:{" "}
+      {off.map(([from, to]) => `${dayTime(from)} – ${dayTime(to)} (${offLength(to - from)})`).join("; ")}
+    </p>
+  );
+}
+
+/** How much of the window the machine was off, in its own words. */
+function offInside(off: OffPeriod[] = [], startMs: number, endMs: number): number {
+  return off.reduce((total, [from, to]) => total + Math.max(0, Math.min(to, endMs) - Math.max(from, startMs)), 0);
+}
+
+function RuleTable({ rules, onSearch }: { rules: TopRule[]; onSearch: (text: string) => void }) {
   return (
     <div className="table-wrap">
       <table>
@@ -132,7 +156,11 @@ function RuleTable({ rules }: { rules: TopRule[] }) {
         <tbody>
           {rules.map((rule) => (
             <tr key={`${rule.rule}:${rule.rev}`}>
-              <td className="rule">{ruleName(rule)}</td>
+              <td className="rule">
+                <button type="button" className="link" title="Search the Alert Explorer for it" onClick={() => onSearch(ruleName(rule))}>
+                  {ruleName(rule)}
+                </button>
+              </td>
               <td className="number">{count(rule.alerts)}</td>
               <td className="message" title={rule.message}>
                 {rule.message}
@@ -189,11 +217,14 @@ export function Overview({
   options,
   status,
   onUnauthorized,
+  onSearch,
 }: {
   options: Options;
   /** What the status panel shows, every 10 seconds. */
   status: Fetched<Status>;
   onUnauthorized: () => void;
+  /** Opens the Alert Explorer searching for a rule. */
+  onSearch: (text: string) => void;
 }) {
   const [step, setStep] = useRemembered("ids-chart-step", options.default_chart_step, options.chart_steps);
   const [live, setLive] = useRemembered<boolean>("ids-chart-live", false);
@@ -283,7 +314,14 @@ export function Overview({
       {!lastHour && <p className="muted">No alerts stored yet.</p>}
       {lastHour && (
         <section>
-          <h2>Last hour</h2>
+          <div className="section-head">
+            <h2>Last hour</h2>
+            {offInside(lastHour.off, lastHour.start_ms, lastHour.end_ms) > 0 && (
+              <span className="muted">
+                Machine off for {offLength(offInside(lastHour.off, lastHour.start_ms, lastHour.end_ms))} of it
+              </span>
+            )}
+          </div>
           <div className="tiles">
             <Tile
               label="Alerts"
@@ -324,7 +362,9 @@ export function Overview({
               height={chartHeight(byEngine(day.alerts).map(([, values]) => values))}
               yLabel={`Alerts per ${day.step_ms / 60_000} minutes`}
               series={engineLines(day.alerts)}
+              off={day.off}
             />
+            <OffNote off={day.off} />
           </section>
         )
       )}
@@ -346,7 +386,7 @@ export function Overview({
             {byEngine(top.rules).map(([engine, rules]) => (
               <div key={engine}>
                 <h3>{NAMES[engine]}</h3>
-                {rules.length ? <RuleTable rules={rules} /> : <p className="muted">None</p>}
+                {rules.length ? <RuleTable rules={rules} onSearch={onSearch} /> : <p className="muted">None</p>}
               </div>
             ))}
           </div>

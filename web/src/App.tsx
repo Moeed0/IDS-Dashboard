@@ -3,6 +3,7 @@ import { AlertExplorer } from "./AlertExplorer";
 import { Overview } from "./Overview";
 import { StatusPanel } from "./StatusPanel";
 import { Unauthorized, engineNames, errorText, getJson, setToken, useApi, type Options, type Status } from "./api";
+import type { SearchRequest } from "./AlertExplorer";
 
 type Page = "overview" | "alerts";
 const PAGES: { key: Page; label: string }[] = [
@@ -12,6 +13,12 @@ const PAGES: { key: Page; label: string }[] = [
 
 export default function App() {
   const [page, setPage] = useState<Page>("overview");
+  // A rule clicked on the Overview, for the Alert Explorer's search.
+  const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(null);
+  const searchAlerts = useCallback((text: string) => {
+    setSearchRequest({ text, at: Date.now() });
+    setPage("alerts");
+  }, []);
   // Asked for only when the API answers 401: with IDS_API_REQUIRE_TOKEN=false
   // it lets every browser in.
   const [needsToken, setNeedsToken] = useState(false);
@@ -58,7 +65,13 @@ export default function App() {
         <span className="header-note muted">Times are PKT (UTC+05:00)</span>
       </header>
       {options ? (
-        <Screens page={page} options={options} onUnauthorized={onUnauthorized} />
+        <Screens
+          page={page}
+          options={options}
+          onUnauthorized={onUnauthorized}
+          onSearch={searchAlerts}
+          searchRequest={searchRequest}
+        />
       ) : (
         <div className="layout">
           <main>{error && <p className="error">{error}</p>}</main>
@@ -69,13 +82,29 @@ export default function App() {
 }
 
 /** The screen with the status panel beside it; both show what /status says. */
-function Screens({ page, options, onUnauthorized }: { page: Page; options: Options; onUnauthorized: () => void }) {
+function Screens({
+  page,
+  options,
+  onUnauthorized,
+  onSearch,
+  searchRequest,
+}: {
+  page: Page;
+  options: Options;
+  onUnauthorized: () => void;
+  onSearch: (text: string) => void;
+  searchRequest: SearchRequest | null;
+}) {
   const status = useApi<Status>("/status", {}, onUnauthorized, 10_000);
   return (
     <div className="layout">
       <main>
-        {page === "overview" && <Overview options={options} status={status} onUnauthorized={onUnauthorized} />}
-        {page === "alerts" && <AlertExplorer options={options} onUnauthorized={onUnauthorized} />}
+        {page === "overview" && (
+          <Overview options={options} status={status} onUnauthorized={onUnauthorized} onSearch={onSearch} />
+        )}
+        {page === "alerts" && (
+          <AlertExplorer options={options} onUnauthorized={onUnauthorized} searchRequest={searchRequest} />
+        )}
       </main>
       <StatusPanel status={status} />
     </div>

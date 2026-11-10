@@ -695,6 +695,12 @@ def main() -> None:
             if not files:
                 print(f"No {engine} rules found at {rules}")
 
+            # The local rules both engines load, kept apart from each
+            # engine's own (deploy/rules/local.rules).
+            local = Path(source.get("local_rules") or "")
+            if local.is_file() and local not in files:
+                files.append(local)
+
             totals = Counter()
 
             for rule_file in files:

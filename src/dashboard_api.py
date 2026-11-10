@@ -28,11 +28,12 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
+from ids.alert_archive import TooManyAlerts, archive_contents, archive_file
 from ids.combined_detections import PKT, WINDOW_LENGTHS
 from ids.config import ENV_FILE, api_token_required, engine_sources, get_api_token, get_settings
 from ids.dashboard_data import (
@@ -40,6 +41,7 @@ from ids.dashboard_data import (
     DEFAULT_CHART_STEP,
     DEFAULT_TOP_RULES_LENGTH,
     ENGINES,
+    EXPORT_MAX_ALERTS,
     LIVE_STEP,
     PAGE_SIZES,
     TIME_RANGES,
@@ -52,6 +54,7 @@ from ids.dashboard_data import (
     rule_pairs,
     status,
 )
+from ids.uptime import machine_off_periods
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIST = PROJECT_ROOT / "web" / "dist"
@@ -126,14 +129,31 @@ def create_app(
     rule_intelligence: Callable[..., Any] | None = offline_rule_intelligence,
     web_dist: Path | None = WEB_DIST,
     engines: Sequence[str] = ENGINES,
+    archive_dir: Path | str | None = None,
+    archive_settings: Mapping[str, int] | None = None,
+    off_periods: Callable[[], list[tuple[int, int]]] | None = None,
+    stats_files: Mapping[str, Path | str] | None = None,
+    export_max_alerts: int = EXPORT_MAX_ALERTS,
 ) -> Starlette:
     """The API over the live database at ``db_path``, answering requests
     that send ``token`` (every request when it is None), and the built React
     page in ``web_dist`` at /. ``state_file`` is the collector's, whose
     changes show it storing alerts. The screens show the ``engines`` this
-    machine runs (IDS_ENGINES)."""
+    machine runs (IDS_ENGINES), the alerts that have left the database from
+    ``archive_dir`` (kept as ``archive_settings`` says), when the machine was
+    off from ``off_periods``, and each engine's drops from its statistics
+    file in ``stats_files``. One export holds at most ``export_max_alerts``."""
     if token == "":
         raise ValueError("the API needs a token, or None to let every request in")
+
+    # The past boots don't change while the API runs, which starts after
+    # this one: read them once, on the first request that needs them.
+    off_cache: list[list[tuple[int, int]]] = []
+
+    def machine_off() -> list[tuple[int, int]]:
+        if not off_cache:
+            off_cache.append(off_periods() if off_periods is not None else [])
+        return off_cache[0]
 
     def guarded(handler: Callable[[Request], Response], *, public: bool = False):
         def endpoint(request: Request) -> Response:
@@ -185,16 +205,29 @@ def create_app(
         return JSONResponse(overview(
             db_path, ids_sources, alert_retention=alert_retention, step_minutes=step,
             top_rules_length=_length(request, "top_rules_length", DEFAULT_TOP_RULES_LENGTH),
-            engines=engines,
+            engines=engines, off_periods=machine_off(),
         ))
 
     def status_screen(request: Request) -> Response:
         return JSONResponse(status(
             db_path, state_file, ids_sources, alert_retention=alert_retention, engines=engines,
+            stats_files=stats_files,
         ))
 
     def live_chart(request: Request) -> Response:
-        return JSONResponse(live(db_path, engines=engines))
+        return JSONResponse(live(db_path, engines=engines, off_periods=machine_off()))
+
+    def archive_list(request: Request) -> Response:
+        """The archive's zips and day files, and how long it keeps them."""
+        found = archive_contents(archive_dir) if archive_dir is not None else {"zips": [], "days": []}
+        return JSONResponse({**found, **(archive_settings or {})})
+
+    def archive_download(request: Request) -> Response:
+        name = request.path_params["name"]
+        path = archive_file(archive_dir, name) if archive_dir is not None else None
+        if path is None:
+            return JSONResponse({"error": f"no archive file named {name}"}, status_code=404)
+        return FileResponse(path, filename=name)
 
     def alert_list(request: Request) -> Response:
         engine = request.query_params.get("engine") or None
@@ -228,6 +261,7 @@ def create_app(
     def window(request: Request) -> dict[str, Any] | None:
         return export_window(
             db_path, _length(request), _int_param(request, "end_ms"), engines=engines,
+            max_alerts=export_max_alerts, archive_dir=archive_dir,
         )
 
     def export_window_screen(request: Request) -> Response:
@@ -241,10 +275,14 @@ def create_app(
         found = window(request)
         if found is None:
             return JSONResponse({"error": "no alerts stored yet"}, status_code=404)
-        built = combined_export(
-            db_path, found["start_ms"], found["end_ms"], _length(request),
-            rule_intelligence=rule_intelligence, engines=engines,
-        )
+        try:
+            built = combined_export(
+                db_path, found["start_ms"], found["end_ms"], _length(request),
+                rule_intelligence=rule_intelligence, engines=engines,
+                archive_dir=archive_dir, max_alerts=export_max_alerts,
+            )
+        except TooManyAlerts as exc:
+            return JSONResponse({"error": str(exc)}, status_code=413)
         counts = built["alerts"]
         values = (
             found["start_ms"], found["end_ms"], counts.get("snort", 0),
@@ -269,6 +307,8 @@ def create_app(
         Route("/rule-pairs", guarded(rule_pair_list)),
         Route("/export/window", guarded(export_window_screen)),
         Route("/export", guarded(export_file)),
+        Route("/archive", guarded(archive_list)),
+        Route("/archive/{name}", guarded(archive_download)),
     ]
     if web_dist is not None and (Path(web_dist) / "index.html").is_file():
         # Everything the routes above do not answer: the page and its files.
@@ -375,6 +415,17 @@ def main(argv: list[str] | None = None) -> None:
         alert_retention=settings.alert_retention,
         state_file=settings.state_file,
         engines=settings.engines,
+        archive_dir=settings.alert_archive_dir if settings.alert_archive_days else None,
+        archive_settings={
+            "keep_days": settings.alert_archive_days,
+            "zip_days": settings.alert_archive_zip_days,
+        },
+        off_periods=machine_off_periods,
+        stats_files={
+            "snort": settings.snort_perf_file,
+            "suricata": settings.suricata_stats_file,
+        },
+        export_max_alerts=settings.export_max_alerts,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

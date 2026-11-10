@@ -9,6 +9,55 @@ It runs on an Ubuntu VM in a lab today. It is set up so that it can move to
 a Raspberry Pi and run one engine or both (see
 [docs/modular-setup-plan.md](docs/modular-setup-plan.md)).
 
+## Quick start
+
+On an Ubuntu machine where Snort 3, Suricata 8 or both are installed and
+running with their rules ([Setting up a machine](#setting-up-a-machine),
+steps 1 and 2):
+
+1. Download `IDS-Dashboard-<version>.zip` from the
+   [latest release](https://github.com/Moeed0/IDS-Dashboard/releases/latest).
+   Its dashboard page is already built, so Node.js isn't needed. Unzip it
+   and go into its folder, `IDS-Dashboard`:
+
+   ```bash
+   unzip IDS-Dashboard-*.zip && cd IDS-Dashboard
+   ```
+
+2. Set everything up. It asks for your password for the steps that need
+   sudo:
+
+   ```bash
+   ./setup.sh
+   ```
+
+3. Open `http://<the machine's address>:8501/`. The page asks for the API
+   token, which `grep IDS_API_TOKEN .env` shows.
+
+`setup.sh` makes the Python environment, copies `.env.example` to `.env` for
+the engines it finds, builds the rule index, lets the collector read the
+engines' logs, puts the 12 basic local rules into both engines
+(`--no-local-rules` leaves them out), saves their rule counts, and installs
+the collector and the dashboard as services that start at boot. Check `.env`'s paths afterwards;
+when one changes, run `./setup.sh` again (it keeps `.env`). It needs Python
+3 with its `venv` module (tested with 3.13) and sudo. `./setup.sh --help`
+lists its options.
+
+From a `git clone` it works the same, but builds the page first, which
+needs Node.js 22.
+
+**Updating:** every release unzips into the same `IDS-Dashboard` folder. Put
+the newer zip in the folder that holds it, then unzip over it and run the
+setup again:
+
+```bash
+unzip -o IDS-Dashboard-v1.0.1.zip && cd IDS-Dashboard && ./setup.sh
+```
+
+That replaces the code and the page, and restarts the services with them.
+`.env`, the stored alerts (`ids_live.db`), the alert archive and the
+collector's places in the logs stay as they are, since no zip holds them.
+
 ## How it works
 
 ```
@@ -27,18 +76,22 @@ network interface (afpacket)
 ```
 
 - **Overview:**
-  - whether each engine and the collector run;
+  - whether each engine and the collector run, and how many packets each
+    engine dropped in the last hour;
   - the last hour's alerts, and the packets one or both engines alerted on;
-  - the last 24 hours, or a live chart of the last 15 minutes;
+  - the last 24 hours, or a live chart of the last 15 minutes, with the
+    times the machine was off shaded;
   - the top rules.
-- **Alert Explorer:** every stored alert, searchable, and the combined JSON
+- **Alert Explorer:** every stored alert, searchable, the combined JSON
   for a chosen time window
-  ([docs/combined-json-format.md](docs/combined-json-format.md)).
+  ([docs/combined-json-format.md](docs/combined-json-format.md)), and the
+  old alerts' zips to download.
 
 ## What is where
 
 | Path | What it holds |
 |---|---|
+| `setup.sh` | Sets the dashboard up on a machine in one go ([Quick start](#quick-start)) |
 | `src/live_dual_collector.py` | The collector |
 | `src/dashboard_api.py` | The API, which also serves the page |
 | `src/ids/` | The shared code: settings, database, tailer, normalizer, screen data, combined export, rule and intel lookups, rule index builder |
@@ -49,6 +102,7 @@ network interface (afpacket)
 | `data/` | Data each machine builds or downloads ([data/README.md](data/README.md)) |
 | `alert-archive/` | The alerts older than the database keeps, in 10-day zips (see [Old alerts](#old-alerts)) |
 | `tests/` | The tests |
+| `.github/workflows/` | On GitHub: the tests and the page's build on every push, and a release zip with the page built for each version tag |
 | `docs/` | The API and data ([docs/react-native-port.md](docs/react-native-port.md)), the export format and the modular plan |
 
 ## Setting up a machine
@@ -115,6 +169,30 @@ Neither rule set is in this repository; each comes from its maker.
   Without an account, Snort's community rules (about 4,000) are free:
   `https://www.snort.org/downloads/community/snort3-community-rules.tar.gz`.
 
+- **Local rules (in this repository):** `deploy/rules/local.rules` holds 12
+  basic rules that both engines load from the same text, so a matching
+  packet raises an alert from each: ping, the first packet of FTP, SSH,
+  Telnet, SMB and RDP connections, Nmap's scripts, sqlmap and Nikto in a
+  request, directory traversal and `/etc/passwd`. Their SIDs start at
+  1000001 and their messages with "LOCAL". `setup.sh` puts them into the
+  engines; `--no-local-rules` leaves them out. To put them in, or take them
+  out, later:
+
+  ```bash
+  deploy/install-local-rules.sh
+  ```
+
+  ```bash
+  deploy/install-local-rules.sh --remove
+  ```
+
+  It installs them as `/etc/suricata/rules/local.rules` and
+  `/usr/local/etc/snort/local.rules` (empty after `--remove`), adds those
+  files to Suricata's `rule-files` and Snort's rules when they aren't
+  there, checks both engines and reloads them, and updates the dashboard's
+  rule counts and rule index. `IDS_LOCAL_RULES` in `.env` is empty on a
+  machine without them. Edit the file and run it again to change them.
+
 ### 3. Let the collector read the logs
 
 The engines write their logs as root, and the collector runs as your user.
@@ -132,6 +210,10 @@ sudo setfacl -d -m u:$USER:r /var/log/snort /var/log/suricata
 The second command keeps new log files readable too.
 
 ### 4. The dashboard
+
+`./setup.sh` does all of this and section 3 in one go (step 6 with
+`--with-intel`; see [Quick start](#quick-start)). The steps are here to do
+by hand.
 
 1. Get the code and its Python packages. If your `python3` is not 3.13, use
    `python3.13`.
@@ -214,7 +296,13 @@ With `IDS_ALERT_ARCHIVE_DAYS=0` the alerts past the limit are deleted
 instead. When the archive can't be written (a full disk, say), the alerts
 stay in the database, past its limit, until it can.
 
-To look inside:
+The Alert Explorer lists the zips and day files under "Old alerts", to
+download from any computer, and a combined export of an older window takes
+its alerts from the archive. One export holds at most
+`IDS_EXPORT_MAX_ALERTS` alerts (150,000), as building one takes about 8 KB
+of memory an alert.
+
+To look inside on the machine:
 
 ```bash
 unzip -l alert-archive/alerts_2026-11-03_to_2026-11-12.zip

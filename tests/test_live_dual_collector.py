@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections import Counter
 import shutil
 import sqlite3
 import time
@@ -18,6 +19,7 @@ from live_dual_collector import (
     log_files,
     run_periodic_retention,
     setup_database,
+    stored_summary,
 )
 
 
@@ -374,3 +376,25 @@ def test_the_alerts_past_the_limit_are_archived_or_with_0_archive_days_deleted(
     run_periodic_retention(settings, time.monotonic() - 3600)
     assert stored() == ["alert 5"]
     assert archived() == ["alert 1", "alert 2"]
+
+
+def test_the_journal_gets_one_line_a_minute_of_the_alerts_stored(monkeypatch, tmp_path):
+    monkeypatch.setattr("ids.config.ENV_FILE", tmp_path / "no.env")
+    monkeypatch.setenv("IDS_DB_FILE", str(tmp_path / "ids.db"))
+    monkeypatch.setenv("IDS_STATE_FILE", str(tmp_path / "state.json"))
+    for engine, name in (("SNORT_ALERT", "alert_json.txt"), ("SURICATA_EVE", "eve.json")):
+        (tmp_path / name).write_text("")
+        monkeypatch.setenv(f"IDS_{engine}_FILE", str(tmp_path / name))
+    settings = get_settings()
+    setup_database(settings)
+    tailers = build_tailers(settings, start_at_end=False)
+    pending = PendingBatch()
+    for number, engine in enumerate(("snort", "suricata", "suricata")):
+        pending.rows.append({"engine": engine, "event_ts_utc": 1793947200000 + number, "event_hash": f"hash-{number}"})
+    pending.record_position("suricata", (tmp_path / "eve.json").stat().st_ino, 0)
+
+    written = flush_pending(settings, pending, tailers)
+
+    assert written == {"snort": 1, "suricata": 2}
+    assert stored_summary(written, settings) == "[STORED] 3 alerts in the last minute: snort 1, suricata 2"
+    assert stored_summary(Counter(), settings) == "[STORED] 0 alerts in the last minute: snort 0, suricata 0"

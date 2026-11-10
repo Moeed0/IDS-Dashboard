@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CombinedExport } from "./CombinedExport";
+import { OldAlerts } from "./OldAlerts";
 import {
   NAMES,
   count,
@@ -59,7 +60,21 @@ function useDebounced<T>(value: T, delayMs: number): T {
   return settled;
 }
 
-export function AlertExplorer({ options, onUnauthorized }: { options: Options; onUnauthorized: () => void }) {
+/** A search to start with: a rule clicked elsewhere, and when, so the same rule clicked again starts it again. */
+export interface SearchRequest {
+  text: string;
+  at: number;
+}
+
+export function AlertExplorer({
+  options,
+  onUnauthorized,
+  searchRequest,
+}: {
+  options: Options;
+  onUnauthorized: () => void;
+  searchRequest?: SearchRequest | null;
+}) {
   // The layout, time range and rows per page are kept in this browser.
   const [layout, setLayout] = useRemembered<"side" | "combined">("ids-explorer-layout", "side", ["side", "combined"]);
   const [range, setRange] = useRemembered(
@@ -68,6 +83,15 @@ export function AlertExplorer({ options, onUnauthorized }: { options: Options; o
     options.time_ranges.map((choice) => choice.label),
   );
   const [search, setSearch] = useState("");
+  // A rule clicked on the Overview or in the rule pairs: search for it, from
+  // the top of the screen, where its alerts are.
+  const searchFor = useCallback((text: string) => {
+    setSearch(text);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+  useEffect(() => {
+    if (searchRequest) searchFor(searchRequest.text);
+  }, [searchRequest, searchFor]);
   const [pageSize, setPageSize] = useRemembered(
     "ids-explorer-page-size",
     options.page_sizes.includes(25) ? 25 : options.page_sizes[0],
@@ -151,9 +175,10 @@ export function AlertExplorer({ options, onUnauthorized }: { options: Options; o
         />
       )}
 
-      {options.engines.length > 1 && <RulePairSection onUnauthorized={onUnauthorized} />}
+      {options.engines.length > 1 && <RulePairSection onUnauthorized={onUnauthorized} onSearch={searchFor} />}
 
       <CombinedExport options={options} onUnauthorized={onUnauthorized} />
+      <OldAlerts onUnauthorized={onUnauthorized} />
     </>
   );
 }
@@ -262,7 +287,7 @@ const PAIRS_REFRESH_MS = 30_000;
  * The rules behind the Overview's "Both engines": over the last hour, a Snort
  * rule and a Suricata rule that fired on one packet, with how many packets.
  */
-function RulePairSection({ onUnauthorized }: { onUnauthorized: () => void }) {
+function RulePairSection({ onUnauthorized, onSearch }: { onUnauthorized: () => void; onSearch: (text: string) => void }) {
   const { data, error } = useApi<RulePairs>("/rule-pairs", {}, onUnauthorized, PAIRS_REFRESH_MS);
   return (
     <section>
@@ -271,12 +296,21 @@ function RulePairSection({ onUnauthorized }: { onUnauthorized: () => void }) {
         <span className="muted">last hour</span>
       </div>
       {error && <p className="error">{error}</p>}
-      {data && (data.pairs.length ? <PairTable pairs={data.pairs} /> : <p className="muted">None</p>)}
+      {data && (data.pairs.length ? <PairTable pairs={data.pairs} onSearch={onSearch} /> : <p className="muted">None</p>)}
     </section>
   );
 }
 
-function PairTable({ pairs }: { pairs: RulePair[] }) {
+/** A rule's gid:sid:rev, as a link that searches the alerts for it. */
+function RuleLink({ name, onSearch }: { name: string; onSearch: (text: string) => void }) {
+  return (
+    <button type="button" className="link" title="Search the alerts for it" onClick={() => onSearch(name)}>
+      {name}
+    </button>
+  );
+}
+
+function PairTable({ pairs, onSearch }: { pairs: RulePair[]; onSearch: (text: string) => void }) {
   return (
     <div className="table-wrap">
       <table className="pairs">
@@ -296,11 +330,15 @@ function PairTable({ pairs }: { pairs: RulePair[] }) {
         <tbody>
           {pairs.map((pair) => (
             <tr key={`${ruleName(pair.snort)} ${ruleName(pair.suricata)}`}>
-              <td className="rule">{ruleName(pair.snort)}</td>
+              <td className="rule">
+                <RuleLink name={ruleName(pair.snort)} onSearch={onSearch} />
+              </td>
               <td className="message" title={pair.snort.message}>
                 {pair.snort.message}
               </td>
-              <td className="rule">{ruleName(pair.suricata)}</td>
+              <td className="rule">
+                <RuleLink name={ruleName(pair.suricata)} onSearch={onSearch} />
+              </td>
               <td className="message" title={pair.suricata.message}>
                 {pair.suricata.message}
               </td>

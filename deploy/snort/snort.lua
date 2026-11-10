@@ -30,6 +30,8 @@ EXTERNAL_NET = 'any'
 include 'snort_defaults.lua'
 
 -- Official Snort Registered Ruleset
+-- This lab's registered rules; on another machine, where the README unpacks
+-- them: /usr/local/etc/snort/registered/rules
 RULE_PATH = '/home/moeed824/snort-registered-test/rules'
 
 ---------------------------------------------------------------------------
@@ -199,8 +201,11 @@ ips =
     -- note that rules files can include other rules files
     -- (see also related path vars at the top of snort_defaults.lua)
 
+    -- local.rules: the basic rules Snort and Suricata share
+    -- (deploy/rules/local.rules, installed by deploy/install-local-rules.sh).
     rules = [[
         include $RULE_PATH/includes.rules
+        include /usr/local/etc/snort/local.rules
     ]],
     variables = default_variables
 }

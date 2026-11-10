@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from ids.db import (
 from ids.live_normalizer import normalize_live_event
 from ids.schema import ensure_schema
 from ids.tailer import PersistentJsonTailer
+
+# How often the journal gets a line of how many alerts were stored.
+SUMMARY_SECONDS = 60
 
 
 @dataclass
@@ -87,9 +91,13 @@ def flush_pending(
     settings: Settings,
     pending: PendingBatch,
     tailers: dict[str, PersistentJsonTailer],
-) -> None:
+) -> Counter[str]:
+    """Writes the batch's alerts and acknowledges its log positions; how
+    many alerts of each engine it wrote."""
+    written: Counter[str] = Counter()
+
     if not pending.latest_positions:
-        return
+        return written
 
     # First write alerts. If this fails, no source position is acknowledged.
     if pending.rows:
@@ -116,9 +124,23 @@ def flush_pending(
             offset,
         )
 
+    written.update(row.get("engine") for row in pending.rows)
     pending.rows.clear()
     pending.latest_positions.clear()
     pending.processed_lines = 0
+    return written
+
+
+def stored_summary(stored: Counter[str], settings: Settings) -> str:
+    """One journal line for the alerts stored in the last minute, in place
+    of a line for each alert."""
+    per_engine = ", ".join(
+        f"{engine} {stored[engine]}" for engine in settings.engines
+    )
+    return (
+        f"[STORED] {sum(stored.values())} alerts in the last minute: "
+        f"{per_engine}"
+    )
 
 
 def archive_summary(settings: Settings) -> str:
@@ -258,15 +280,6 @@ def handle_line(
         offset,
     )
 
-    print(
-        f"[ALERT] {engine:<8} | "
-        f"{normalized.get('timestamp')} | "
-        f"{normalized.get('msg')} | "
-        f"{normalized.get('src')} -> "
-        f"{normalized.get('dst')} | "
-        f"Severity: {normalized.get('severity')}"
-    )
-
 
 def run_collector(
     settings: Settings,
@@ -279,9 +292,11 @@ def run_collector(
     )
 
     pending = PendingBatch()
+    stored: Counter[str] = Counter()
 
     last_flush = time.monotonic()
     last_retention = time.monotonic()
+    last_summary = time.monotonic()
 
     print("=== Dual IDS Collector ===")
     print(
@@ -363,10 +378,12 @@ def run_collector(
             )
 
             if flush_due or position_flush_due:
-                flush_pending(
-                    settings,
-                    pending,
-                    tailers,
+                stored.update(
+                    flush_pending(
+                        settings,
+                        pending,
+                        tailers,
+                    )
                 )
                 last_flush = time.monotonic()
 
@@ -374,6 +391,11 @@ def run_collector(
                 settings,
                 last_retention,
             )
+
+            if time.monotonic() - last_summary >= SUMMARY_SECONDS:
+                print(stored_summary(stored, settings))
+                stored.clear()
+                last_summary = time.monotonic()
 
             time.sleep(0.05)
 

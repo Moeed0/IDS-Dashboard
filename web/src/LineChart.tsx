@@ -1,7 +1,9 @@
 // A line chart of counts per time step, one line per series: 2px lines, the
 // series named at their ends, and a crosshair with the values. Given a
 // domain it shows that span of time instead of the series' own, so a chart
-// whose domain follows the clock moves with it.
+// whose domain follows the clock moves with it. Times the machine was off
+// are shaded, and the lines leave out the steps wholly inside them instead
+// of drawing 0.
 import { useState, type PointerEvent } from "react";
 import { count } from "./api";
 import { PKT_OFFSET_MS, hourLabel, stamp } from "./time";
@@ -42,6 +44,7 @@ export function LineChart({
   domain,
   tickEveryMs = 3 * 60 * 60 * 1000,
   tickLabel = hourLabel,
+  off = [],
 }: {
   startMs: number;
   stepMs: number;
@@ -55,6 +58,8 @@ export function LineChart({
   /** A time label at each multiple of this, in PKT. */
   tickEveryMs?: number;
   tickLabel?: (ms: number) => string;
+  /** When the machine was off, as [from, to]. */
+  off?: [number, number][];
 }) {
   // Where the pointer is across the plot, from 0 to 1.
   const [hover, setHover] = useState<number | null>(null);
@@ -73,6 +78,26 @@ export function LineChart({
   const gridLines = Array.from({ length: spaces + 1 }, (_, index) => index * spacing);
   const x = (ms: number) => MARGIN.left + (to > from ? ((ms - from) / (to - from)) * PLOT_WIDTH : PLOT_WIDTH / 2);
   const y = (value: number) => MARGIN.top + plotHeight - (value / top) * plotHeight;
+  // A step wholly inside a time the machine was off has no count to show.
+  const offAt = (index: number) =>
+    off.some(([offFrom, offTo]) => offFrom <= timeAt(index) && timeAt(index) + stepMs <= offTo);
+  const bands = off
+    .map(([offFrom, offTo]) => [x(Math.max(offFrom, from)), x(Math.min(offTo, to))])
+    .filter(([left, right]) => right > left);
+  // Each line, lifting the pen over the steps the machine was off.
+  const linePath = (values: number[]) => {
+    let path = "";
+    let drawing = false;
+    values.forEach((value, index) => {
+      if (offAt(index)) {
+        drawing = false;
+        return;
+      }
+      path += `${drawing ? "L" : "M"}${x(timeAt(index))},${y(value)}`;
+      drawing = true;
+    });
+    return path;
+  };
   const ticks: number[] = [];
   const firstTick = Math.ceil((from + PKT_OFFSET_MS) / tickEveryMs) * tickEveryMs - PKT_OFFSET_MS;
   for (let ms = firstTick; ms <= to; ms += tickEveryMs) ticks.push(ms);
@@ -92,7 +117,8 @@ export function LineChart({
       ? Math.max(0, Math.min(steps - 1, Math.round((from + hover * (to - from) - startMs) / stepMs)))
       : null;
   const hovered = pointed !== null && timeAt(pointed) >= from && timeAt(pointed) <= to ? pointed : null;
-  const reached = hovered === null ? [] : series.filter((line) => hovered < line.values.length);
+  const hoveredOff = hovered !== null && offAt(hovered);
+  const reached = hovered === null || hoveredOff ? [] : series.filter((line) => hovered < line.values.length);
 
   function onPointerMove(event: PointerEvent<SVGRectElement>) {
     const box = event.currentTarget.getBoundingClientRect();
@@ -113,6 +139,16 @@ export function LineChart({
             </clipPath>
           </defs>
         )}
+        {bands.map(([left, right]) => (
+          <g key={left}>
+            <rect className="off-band" x={left} y={MARGIN.top} width={right - left} height={plotHeight} />
+            {right - left >= 28 && (
+              <text className="off-label" x={(left + right) / 2} y={MARGIN.top + 14} textAnchor="middle">
+                Off
+              </text>
+            )}
+          </g>
+        ))}
         {gridLines.map((value) => (
           <g key={value}>
             <line className="grid" x1={MARGIN.left} x2={MARGIN.left + PLOT_WIDTH} y1={y(value)} y2={y(value)} />
@@ -130,7 +166,7 @@ export function LineChart({
           {series.map((line) => (
             <path
               key={line.name}
-              d={line.values.map((value, index) => `${index ? "L" : "M"}${x(timeAt(index))},${y(value)}`).join("")}
+              d={linePath(line.values)}
               fill="none"
               strokeWidth={2}
               strokeLinejoin="round"
@@ -188,6 +224,7 @@ export function LineChart({
           }}
         >
           <strong>{stamp(timeAt(hovered))}</strong>
+          {hoveredOff && <span>Machine off</span>}
           {reached.map((line) => (
             <span key={line.name}>
               <i style={{ background: line.color }} />

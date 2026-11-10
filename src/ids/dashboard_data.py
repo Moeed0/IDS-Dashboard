@@ -19,6 +19,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from ids.alert_archive import TooManyAlerts, archived_alerts
+from ids.capture_stats import snort_last_hour, suricata_last_hour
 from ids.combined_detections import (
     PKT,
     WINDOW_LENGTHS,
@@ -34,6 +36,7 @@ from ids.combined_detections import (
 )
 from ids.config import KNOWN_ENGINES
 from ids.ids_config import read_network_variables
+from ids.uptime import off_during
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LAB_PHASES_FILE = PROJECT_ROOT / "config" / "lab_phases.json"
@@ -65,6 +68,13 @@ TIME_RANGES = {
     "All stored": None,
 }
 PAGE_SIZES = (10, 25, 50, 100, 250)
+# The most alerts one combined export holds: building one takes about 8 KB
+# of memory an alert, so 150,000 take about 1.2 GB.
+EXPORT_MAX_ALERTS = 150_000
+# The columns an export reads, from the database or the archive.
+EXPORT_FIELDS = ("id", "engine", "event_ts_utc", "msg", "rule_key", "raw_json")
+# Each engine's packets and drops over the last hour, from its statistics.
+CAPTURE_READERS = {"snort": snort_last_hour, "suricata": suricata_last_hour}
 
 
 def _ms(moment: datetime) -> int:
@@ -139,6 +149,7 @@ def overview(
     step_minutes: int = DEFAULT_CHART_STEP,
     top_rules_length: str = DEFAULT_TOP_RULES_LENGTH,
     engines: Sequence[str] = ENGINES,
+    off_periods: Sequence[tuple[int, int]] = (),
 ) -> dict[str, Any]:
     """The Overview screen.
 
@@ -150,7 +161,8 @@ def overview(
 
     All of them end at ``complete_end_ms``, the latest complete time: up to
     there every engine's alerts are stored. The last 24 hours cover whole
-    steps.
+    steps. The last hour and the last 24 hours give the parts of
+    ``off_periods`` (when the machine was off) inside them as ``off``.
     """
     if step_minutes not in CHART_STEPS:
         raise ValueError(f"step_minutes must be one of {CHART_STEPS}")
@@ -165,12 +177,16 @@ def overview(
             _top_rules(connection, end, top_rules_length, engines) if end is not None else None
         )
 
+    if last_day is not None:
+        last_day["off"] = off_during(list(off_periods), last_day["start_ms"], last_day["end_ms"])
+
     last_hour = None
     if end is not None:
         start = end - LAST_HOUR
         last_hour = {
             "start_ms": _ms(start),
             "end_ms": _ms(end),
+            "off": off_during(list(off_periods), _ms(start), _ms(end)),
             **packet_counts(
                 load_window_rows(db_path, start, end, engines),
                 window_start=start,
@@ -495,12 +511,15 @@ def status(
     alert_retention: int | None = None,
     proc_dir: Path = PROC_DIR,
     engines: Sequence[str] = ENGINES,
+    stats_files: Mapping[str, Path | str] | None = None,
 ) -> dict[str, Any]:
     """Whether the IDS is working now, for the status panel on every
     screen: which of the ``engines`` and the collector run, when the
     collector last saved its place in their logs (it does each time it
-    stores alerts), the latest complete time, and for each engine what
-    ``_engines`` gives."""
+    stores alerts), the latest complete time, for each engine what
+    ``_engines`` gives, and from each engine's statistics file in
+    ``stats_files`` its packets and drops over the last hour (``capture``;
+    null when the file can't be read)."""
     try:
         saved_ms = int(Path(state_file).stat().st_mtime * 1000) if state_file else None
     except OSError:
@@ -509,18 +528,28 @@ def status(
     end = complete_window_end(newest)
     with closing(_connect(db_path)) as connection:
         engine_info = _engines(connection, ids_sources or {}, newest, engines)
+    now_ms = _ms(datetime.now(tz=PKT))
     return {
-        "checked_ms": _ms(datetime.now(tz=PKT)),
+        "checked_ms": now_ms,
         "running": _running(proc_dir, engines),
         "collector_saved_ms": saved_ms,
         "complete_end_ms": _ms(end) if end is not None else None,
         "alert_retention": alert_retention,
         "engines": engine_info,
+        "capture": {
+            engine: CAPTURE_READERS[engine](path, now_ms)
+            for engine, path in (stats_files or {}).items()
+            if engine in engines
+        },
     }
 
 
 def live(
-    db_path: Path | str, *, now: datetime | None = None, engines: Sequence[str] = ENGINES,
+    db_path: Path | str,
+    *,
+    now: datetime | None = None,
+    engines: Sequence[str] = ENGINES,
+    off_periods: Sequence[tuple[int, int]] = (),
 ) -> dict[str, Any]:
     """The Overview's live chart, which moves with the clock: each engine's
     alerts per LIVE_STEP over the last LIVE_WINDOW up to ``now``.
@@ -554,6 +583,8 @@ def live(
         # Alerts per step from start_ms, oldest first; an engine's list is
         # shorter when its alerts are stored up to an earlier time.
         "alerts": counts,
+        # When the machine was off in the window.
+        "off": off_during(list(off_periods), start_ms, now_ms),
     }
 
 
@@ -563,11 +594,15 @@ def export_window(
     chosen_end_ms: int | None = None,
     *,
     engines: Sequence[str] = ENGINES,
+    max_alerts: int = EXPORT_MAX_ALERTS,
+    archive_dir: Path | str | None = None,
 ) -> dict[str, Any] | None:
     """Where a combined export of this length starts and ends: at the
     chosen end, or the latest complete time of the ``engines`` when none is
-    chosen or the chosen end is later (``moved_back``). None when no alert
-    is stored."""
+    chosen or the chosen end is later (``moved_back``); how many of its
+    alerts the database holds, the most one export holds, and whether its
+    start is older than the database's oldest alert, so the alerts before
+    that come from the archive. None when no alert is stored."""
     complete = complete_window_end(newest_event_times(db_path, engines))
     if complete is None:
         return None
@@ -575,12 +610,34 @@ def export_window(
     start, end = window_bounds(
         complete if chosen is None else min(chosen, complete), length_label
     )
+    start_ms, end_ms = _ms(start), _ms(end)
+    with closing(_connect(db_path)) as connection:
+        stored = _window_count(connection, start_ms, end_ms, engines)
+        oldest = connection.execute("SELECT MIN(event_ts_utc) FROM alerts").fetchone()[0]
     return {
-        "start_ms": _ms(start),
-        "end_ms": _ms(end),
+        "start_ms": start_ms,
+        "end_ms": end_ms,
         "complete_end_ms": _ms(complete),
         "moved_back": chosen is not None and chosen > complete,
+        "stored_alerts": stored,
+        "max_alerts": max_alerts,
+        "from_archive": archive_dir is not None and oldest is not None and start_ms < oldest,
     }
+
+
+def _window_count(
+    connection: sqlite3.Connection, start_ms: int, end_ms: int, engines: Sequence[str],
+) -> int:
+    """The stored alerts of the ``engines`` that an export of this window
+    reads (a millisecond more on each side, as load_window_rows does)."""
+    return connection.execute(
+        f"""
+        SELECT COUNT(*) FROM alerts
+        WHERE event_ts_utc BETWEEN ? AND ?
+          AND engine IN ({", ".join("?" for _ in engines)})
+        """,
+        (start_ms - 1, end_ms + 1, *engines),
+    ).fetchone()[0]
 
 
 @lru_cache(maxsize=4096)
@@ -608,13 +665,38 @@ def combined_export(
     rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None]
     | None = offline_rule_intelligence,
     engines: Sequence[str] = ENGINES,
+    archive_dir: Path | str | None = None,
+    max_alerts: int = EXPORT_MAX_ALERTS,
 ) -> dict[str, Any]:
     """The combined JSON of the ``engines`` for one window (see
     docs/combined-json-format.md): its file name and text, and the counts the
-    screen shows."""
+    screen shows. The window's alerts come from the database, and the ones
+    that have left it from the archive in ``archive_dir``. A window with more
+    than ``max_alerts`` raises TooManyAlerts before it is built, as building
+    it could take more memory than the machine has."""
     start, end = _moment(start_ms), _moment(end_ms)
+    with closing(_connect(db_path)) as connection:
+        stored = _window_count(connection, start_ms, end_ms, engines)
+        oldest = connection.execute("SELECT MIN(event_ts_utc) FROM alerts").fetchone()[0]
+    if stored > max_alerts:
+        raise TooManyAlerts(stored, max_alerts)
+    rows = load_window_rows(db_path, start, end, engines)
+    if archive_dir is not None and (oldest is None or start_ms < oldest):
+        known = {row["id"] for row in rows}
+        try:
+            archived = archived_alerts(
+                archive_dir, start_ms, end_ms, engines,
+                limit=max_alerts - stored, fields=EXPORT_FIELDS,
+            )
+        except TooManyAlerts:
+            # Said of the whole window, not of its archived part.
+            raise TooManyAlerts(None, max_alerts) from None
+        rows = sorted(
+            [*rows, *(alert for alert in archived if alert["id"] not in known)],
+            key=lambda row: (row["event_ts_utc"], row["id"]),
+        )
     document = build_combined_detections(
-        load_window_rows(db_path, start, end, engines),
+        rows,
         window_start=start,
         window_end=end,
         length_label=length_label,

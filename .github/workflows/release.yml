@@ -1,0 +1,73 @@
+# On a version tag (git tag v1.0.0 && git push public v1.0.0): tests the
+# code, builds the page, and publishes a GitHub release with
+# IDS-Dashboard-<tag>.zip, the code with the page already built, so whoever
+# downloads it needs no Node.js: unzip it and run ./setup.sh. Every
+# version's zip holds one IDS-Dashboard folder, so a newer zip unzips over
+# an installed one and keeps its settings and alerts, which no zip holds.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Python tests
+        run: |
+          pip install -r requirements-dev.txt
+          PYTHONPATH=src python -m pytest -q
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the page
+        working-directory: web
+        run: npm ci && npm run build
+
+      - name: Pack the code and the built page
+        run: |
+          mkdir stage
+          git archive --format=tar --prefix=IDS-Dashboard/ HEAD | tar -x -C stage
+          cp -r web/dist stage/IDS-Dashboard/web/dist
+          (cd stage && zip -qr "../IDS-Dashboard-$GITHUB_REF_NAME.zip" IDS-Dashboard)
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'TEXT'
+          Download **IDS-Dashboard-${{ github.ref_name }}.zip** below: its dashboard page is already built, so Node.js isn't needed.
+
+          On an Ubuntu machine where Snort 3, Suricata 8 or both run:
+
+          ```bash
+          unzip IDS-Dashboard-${{ github.ref_name }}.zip && cd IDS-Dashboard
+          ./setup.sh
+          ```
+
+          Then open `http://<the machine's address>:8501/`. The README's Quick start has the details.
+
+          **Updating an earlier version:** put this zip in the folder that holds `IDS-Dashboard`, then:
+
+          ```bash
+          unzip -o IDS-Dashboard-${{ github.ref_name }}.zip && cd IDS-Dashboard && ./setup.sh
+          ```
+
+          It keeps your `.env`, alerts and alert archive, which no zip holds.
+          TEXT
+          gh release create "$GITHUB_REF_NAME" "IDS-Dashboard-$GITHUB_REF_NAME.zip" \
+            --title "IDS Dashboard $GITHUB_REF_NAME" --notes-file notes.md --generate-notes

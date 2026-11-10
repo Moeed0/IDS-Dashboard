@@ -1,7 +1,7 @@
 // Whether the IDS is working now, down the right side of every screen, with
-// what is stored and the engines' HOME_NET. The engines and the collector,
-// with their dots, head the Overview. The "… ago" times count on between
-// answers, and when none comes.
+// what is stored, each engine's dropped packets and its HOME_NET. The
+// engines and the collector, with their dots, head the Overview. The "… ago"
+// times count on between answers, and when none comes.
 import { ENGINES, NAMES, byEngine, count, machineTime, useNow, type Fetched, type Status } from "./api";
 import { clock, duration } from "./time";
 
@@ -73,6 +73,16 @@ export function StatusPanel({ status }: { status: Fetched<Status> }) {
             {oldest.length > 0 && <div className="muted">since {clock(Math.min(...oldest), machineNow)}</div>}
             {data.alert_retention && <div className="muted">newest {count(data.alert_retention)} kept</div>}
           </div>
+          {data.capture && byEngine(data.capture).length > 0 && (
+            <div className="status-item">
+              <div className="status-name plain">Dropped packets, last hour</div>
+              {byEngine(data.capture).map(([engine, info]) => (
+                <div key={engine} className={info && info.dropped > 0 ? "error" : undefined}>
+                  {NAMES[engine]} {info ? `${count(info.dropped)} of ${count(info.packets)}` : "not known"}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="status-item">
             <div className="status-name plain">HOME_NET</div>
             {engines.map(([engine, info]) => (

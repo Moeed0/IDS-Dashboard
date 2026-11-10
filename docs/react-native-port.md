@@ -114,6 +114,8 @@ Until 5 November 2026 the rule counts and the engines' files were in
 | `GET /rule-pairs` | `rule_pairs(db_path)` | The last hour's rules both engines fired on one packet, for the Alert Explorer |
 | `GET /export/window?length=&end_ms=` | `export_window(db_path, length, end_ms)` | Start and end of a combined export |
 | `GET /export?length=&end_ms=` | `combined_export(db_path, …)` | The combined JSON file for that window |
+| `GET /archive` | `archive_contents(archive_dir)` | The archive's zips and day files, for the Alert Explorer |
+| `GET /archive/{name}` | `archive_file(archive_dir, name)` | One of them, as a download (404 for any other name) |
 
 `/options` gives the fixed choices, so the app does not repeat them:
 
@@ -142,11 +144,12 @@ Until 5 November 2026 the rule counts and the engines' files were in
               "unmatched_lab_attackers": []},
     "suricata": {"…": "same fields"}
   },
-  "last_hour": {"start_ms": 1793691399000, "end_ms": 1793694999000,
+  "last_hour": {"start_ms": 1793691399000, "end_ms": 1793694999000, "off": [],
                 "alerts": {"snort": 483, "suricata": 758},
                 "packets": 824, "both": 332, "snort_only": 93, "suricata_only": 399},
   "last_day": {"start_ms": 1793608200000, "end_ms": 1793694600000, "step_ms": 900000,
-               "alerts": {"snort": [118, 121, "…96 counts"], "suricata": ["…"]}},
+               "alerts": {"snort": [118, 121, "…96 counts"], "suricata": ["…"]},
+               "off": [[1793454454000, 1793676089000]]},
   "top_rules": {"length": "1 day", "start_ms": 1793608599000, "end_ms": 1793694999000,
                 "rules": {"snort": [{"rule": "116:444", "gid": 116, "sid": 444, "rev": 1,
                                      "message": "(ipv4) IPv4 option set",
@@ -196,6 +199,16 @@ What the screen shows:
   used), with the top line the first at or above the highest count:
   "0, 1,000, 2,000" or "0, 50, 100, 150". Until 6 November 2026 the lines
   were set fractions of the top, which gave counts like 62.5 and 187.5.
+- **Machine off**: `off` in the last hour, the last 24 hours and `/live`
+  lists each time the IDS machine was off that overlaps them, whole (it may
+  begin before them), as `[from_ms, to_ms]`: from one boot's last journal entry to the next boot's
+  first (`journalctl --list-boots`, read once when the API starts; a
+  suspended machine is not found). The chart shades them, labels them
+  "Off" and leaves its lines out over a step wholly inside one, instead of
+  drawing 0, and the line under the chart says "Machine off: Sat 7 Nov
+  17:47 – Tue 10 Nov 11:21 (65.6 h)". The Last hour section says how many
+  of its minutes the machine was off. An engine stopped while the machine
+  runs is not shown this way; the status panel shows it while it lasts.
 - **The live chart**, the dropdown's first choice, before the three 24-hour
   ones (also kept in that browser). See "Live chart" below.
 - **Top rules** (`null` likewise): each engine's most frequent rules over the
@@ -218,7 +231,8 @@ seconds") is on:
 ```json
 {"checked_ms": 1793862463000, "window_ms": 900000,
  "start_ms": 1793861550000, "step_ms": 30000,
- "alerts": {"snort": [3, 9, 1, "…"], "suricata": [4, 15, 2, "…"]}}
+ "alerts": {"snort": [3, 9, 1, "…"], "suricata": [4, 15, 2, "…"]},
+ "off": []}
 ```
 
 `alerts[engine][i]` is that engine's alerts in the 30 seconds from
@@ -255,8 +269,20 @@ screen (above the screen on a narrow one):
  "collector_saved_ms": 1793792209007,
  "complete_end_ms": 1793792171000,
  "alert_retention": 200000,
- "engines": {"snort": {"…": "as on the Overview"}, "suricata": {"…": "…"}}}
+ "engines": {"snort": {"…": "as on the Overview"}, "suricata": {"…": "…"}},
+ "capture": {"snort": {"packets": 4612, "dropped": 0, "minutes": 60},
+             "suricata": {"packets": 4280, "dropped": 0, "minutes": 60}}}
 ```
+
+`capture` is each engine's packets and dropped packets over the last hour
+(`minutes` covered, fewer after it started), from the statistics the
+engines write every minute: Snort's perf_monitor file
+(`IDS_SNORT_PERF_FILE`, counts for each minute) and Suricata's `stats.log`
+(`IDS_SURICATA_STATS_FILE`, totals since it started, which leaves out
+counters that are 0). An engine whose file can't be read is `null`. A
+dropped packet is one the engine never looked at, so its alerts are
+missing. The panel shows "Dropped packets, last hour" with each engine's
+"0 of 4,612"; more than 0 turns it red.
 
 `running` says whether Snort, Suricata and `live_dual_collector.py` run on
 the IDS machine (from `/proc`; `null` when it cannot be read).
@@ -354,12 +380,45 @@ Below the lists, with both engines, every 30 seconds: `GET /rule-pairs`.
 - The table shows each rule as `gid:sid:rev` with its message, then the
   packets.
 
+### Click to search
+
+A rule in the Overview's top rules or in the rule pairs is a link: it opens
+the Alert Explorer (or stays there) with the rule, as `gid:sid:rev`, in its
+search box. The time range and layout stay as they were.
+
+### Old alerts
+
+Below the combined export: `GET /archive`, when the screen opens.
+
+```json
+{"zips": [{"name": "alerts_2026-11-03_to_2026-11-12.zip", "first_day": "2026-11-03",
+           "last_day": "2026-11-12", "bytes": 98304512}],
+ "days": [{"name": "2026-11-13.jsonl.gz", "day": "2026-11-13", "bytes": 9437184}],
+ "keep_days": 30, "zip_days": 10}
+```
+
+- The alerts that have left the database (see README.md, "Old alerts"):
+  each 10-day zip, then the day files waiting for theirs, with their sizes,
+  and how long the archive keeps them. Without an archive
+  (`IDS_ALERT_ARCHIVE_DAYS=0`) both lists are empty and there are no
+  `keep_days` and `zip_days`.
+- `GET /archive/{name}` sends one of them as a download; the page fetches
+  it with the token, then saves it. Any other name is 404, so nothing else
+  on the machine can be asked for. A day file is still being added to, so a
+  copy may end in the middle of a minute's alerts; those are in the next
+  copy.
+
 ## Combined JSON export
 
 1. `GET /export/window?length=15 minutes` gives `start_ms`, `end_ms` and
    `complete_end_ms`, for the screen to show. With `end_ms` the user's chosen
    end; a chosen end later than `complete_end_ms` is moved back to it
-   (`moved_back: true`).
+   (`moved_back: true`). It also gives `stored_alerts`, the window's alerts
+   in the database, `max_alerts`, the most one export holds
+   (`IDS_EXPORT_MAX_ALERTS`, 150,000), and `from_archive`, true when the
+   window starts before the database's oldest alert, so its older alerts
+   come from the archive. The screen says so, and won't build a window
+   whose stored alerts are over `max_alerts`.
 2. `GET /export` with the same `length` (and `end_ms`) builds the file for
    that window and returns it as the body (`application/json`, with
    `Content-Disposition: attachment; filename="snort_suricata_combined_20261103_1321_15min.json"`).
@@ -371,8 +430,15 @@ Below the lists, with both engines, every 30 seconds: `GET /rule-pairs`.
    file's own. The app lets the user save or share the file. Its format is
    in `docs/combined-json-format.md`.
 
-Building takes about 0.7 s for 15 minutes and 3–4 s for 24 hours on the live
-data; rule lookups are kept between exports while the server runs.
+The window's alerts come from the database, and the ones that have left it
+from the archive's day files and zips. A window with more than `max_alerts`
+alerts is refused with 413 and `{"error": "This window holds 580,123
+alerts; one export holds at most 150,000 on this machine. Choose a shorter
+length."}` before anything is built: building takes about 8 KB of memory
+an alert (1 hour of 3,574 alerts peaked at 94 MB, 6 hours of 21,032 at 227
+MB), so 7 days at 83,000 alerts a day would need about 4.5 GB, more than
+the VM has free. Building took 1.9 s for that hour and 8.3 s for those 6
+hours; rule lookups are kept between exports while the server runs.
 
 ## Times
 

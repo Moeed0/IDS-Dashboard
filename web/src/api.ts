@@ -49,9 +49,14 @@ export interface EngineStatus {
   unmatched_lab_attackers: string[];
 }
 
+/** When the IDS machine was off, [from_ms, to_ms]. */
+export type OffPeriod = [number, number];
+
 export interface LastHour {
   start_ms: number;
   end_ms: number;
+  /** When the machine was off in the hour. */
+  off?: OffPeriod[];
   alerts: Partial<Record<Engine, number>>;
   packets: number;
   both: number;
@@ -95,6 +100,8 @@ export interface LastDay {
   end_ms: number;
   step_ms: number;
   alerts: Partial<Record<Engine, number[]>>;
+  /** When the machine was off in the 24 hours. */
+  off?: OffPeriod[];
 }
 
 export interface TopRules {
@@ -121,6 +128,8 @@ export interface LiveData {
   step_ms: number;
   /** Alerts per step from start_ms; each engine's run up to where its alerts are stored. */
   alerts: Partial<Record<Engine, number[]>>;
+  /** When the machine was off in the window. */
+  off?: OffPeriod[];
 }
 
 /** What /status says: whether the IDS stores alerts now. */
@@ -133,6 +142,8 @@ export interface Status {
   complete_end_ms: number | null;
   alert_retention: number | null;
   engines: Partial<Record<Engine, EngineStatus>>;
+  /** Each engine's packets and drops over the last hour; null when its statistics can't be read. */
+  capture?: Partial<Record<Engine, Capture | null>>;
 }
 
 export interface AlertRow {
@@ -167,6 +178,28 @@ export interface ExportWindow {
   end_ms: number;
   complete_end_ms: number;
   moved_back: boolean;
+  /** The window's alerts in the database. */
+  stored_alerts?: number;
+  /** The most one export holds. */
+  max_alerts?: number;
+  /** The window starts before the database's oldest alert: older ones come from the archive. */
+  from_archive?: boolean;
+}
+
+/** An engine's packets and drops over the last hour (minutes covered). */
+export interface Capture {
+  packets: number;
+  dropped: number;
+  minutes: number;
+}
+
+/** What /archive gives: the alerts that have left the database. */
+export interface ArchiveList {
+  zips: { name: string; first_day: string; last_day: string; bytes: number }[];
+  days: { name: string; day: string; bytes: number }[];
+  /** How long the archive keeps them; left out without an archive. */
+  keep_days?: number;
+  zip_days?: number;
 }
 
 export interface BuiltExport {
@@ -265,6 +298,18 @@ export async function getJson<T>(path: string, params: Params = {}, signal?: Abo
     window.clearTimeout(timer);
     signal?.removeEventListener("abort", cancel);
   }
+}
+
+/** Saves one of the archive's files, fetched with the token. */
+export async function downloadArchiveFile(name: string): Promise<void> {
+  const response = await request(`/archive/${encodeURIComponent(name)}`, {});
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  // After the browser has taken the file.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /** Builds the combined JSON for the window /export/window gives. */

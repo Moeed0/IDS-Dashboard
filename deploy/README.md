@@ -12,7 +12,9 @@ Nothing here holds a secret; the API token stays in `.env`.
 | `systemd/snort-lab.service.d/daq-afpacket.conf` | `/etc/systemd/system/snort-lab.service.d/` | Snort reads packets with afpacket, so alerts are written at once |
 | `suricata/modify.conf` | `/etc/suricata/modify.conf` | `suricata-update` removes rule thresholds, so every match is logged |
 | `suricata/enable.conf` | `/etc/suricata/enable.conf` | `suricata-update` turns on every ET Open rule that is off by default |
-| `snort/snort.lua` | `/usr/local/etc/snort/snort.lua` by `apply-snort-config.sh` | Snort's settings: every registered rule and the built-in rules on, HOME_NET `any`, statistics every 60 s |
+| `snort/snort.lua` | `/usr/local/etc/snort/snort.lua` by `apply-snort-config.sh` | Snort's settings: every registered rule, the local rules and the built-in rules on, HOME_NET `any`, statistics every 60 s |
+| `rules/local.rules` | `/usr/local/etc/snort/local.rules` and `/etc/suricata/rules/local.rules` by `install-local-rules.sh` | 12 basic rules both engines load from the same text (SIDs from 1000001, messages "LOCAL …") |
+| `install-local-rules.sh` | | Puts the local rules into both engines (`--remove` empties them again): adds the files to Suricata's `rule-files` and Snort's rules when missing, checks both engines, reloads Suricata while it runs, restarts Snort, and updates the dashboard's rule counts and rule index. `setup.sh` runs it |
 | `apply-snort-config.sh` | | Installs `snort/snort.lua`, checks it with `snort -T`, restarts Snort, and puts the old settings back if either step fails |
 | `logrotate/snort` | `/etc/logrotate.d/snort` | Rotates Snort's alert log weekly |
 

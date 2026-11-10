@@ -3,6 +3,7 @@
 export const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function pkt(ms: number) {
   const moment = new Date(ms + PKT_OFFSET_MS);
@@ -39,6 +40,12 @@ export function clock(ms: number, nowMs: number): string {
   const { year, month, day } = pkt(ms);
   if (year === pkt(nowMs).year) return `${day} ${MONTHS[month]} ${time(ms)}`;
   return stamp(ms);
+}
+
+/** Sat 7 Nov 17:47 */
+export function dayTime(ms: number): string {
+  const { month, day, hours, minutes } = pkt(ms);
+  return `${WEEKDAYS[new Date(ms + PKT_OFFSET_MS).getUTCDay()]} ${day} ${MONTHS[month]} ${two(hours)}:${two(minutes)}`;
 }
 
 /** 35 s, 4 min, 47 h, 17 days */

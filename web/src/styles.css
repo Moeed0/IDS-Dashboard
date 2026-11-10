@@ -96,6 +96,43 @@ main p {
   padding: 2px 8px;
 }
 
+/* A time the machine was off, shaded on a chart. */
+.off-band {
+  fill: var(--muted);
+  opacity: 0.12;
+}
+
+.off-label {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.off-note {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+/* A rule that searches the alerts for itself: a link, as a button. */
+button.link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+button.link:hover,
+button.link:focus-visible {
+  text-decoration: underline;
+}
+
+.archive td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
 /* A dropdown that is the heading itself, in the heading's type, as wide as
    the choice it shows where the browser can do that. */
 .heading-choice {

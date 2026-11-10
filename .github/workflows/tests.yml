@@ -1,0 +1,34 @@
+# On every push to main and every pull request: the Python tests, and the
+# page's build (which type-checks it). The tests that need this machine's
+# rule index or threat-intel database skip without them.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Python tests
+        run: |
+          pip install -r requirements-dev.txt
+          PYTHONPATH=src python -m pytest -q
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the page
+        working-directory: web
+        run: npm ci && npm run build
