@@ -1,4 +1,4 @@
-# Basic local rules for both engines. The same text works in Snort 3 and
+# Basic local rules for both engines (24). The same text works in Snort 3 and
 # Suricata 8: deploy/install-local-rules.sh installs this file as
 # /usr/local/etc/snort/local.rules (included by Snort's config) and as
 # /etc/suricata/rules/local.rules (in Suricata's rule-files), so a packet
@@ -32,3 +32,22 @@ alert tcp any any -> any any (msg:"LOCAL Nikto in a request"; flow:to_server,est
 # version in the same packet.
 alert tcp any any -> any any (msg:"LOCAL Directory traversal in an HTTP request"; flow:to_server,established; content:"../"; content:"HTTP/1."; classtype:web-application-attack; sid:1000011; rev:1;)
 alert tcp any any -> any any (msg:"LOCAL /etc/passwd in a request"; flow:to_server,established; content:"/etc/passwd"; classtype:attempted-user; sid:1000012; rev:1;)
+
+# The first packet (SYN) of a connection to a database or remote-desktop
+# service.
+alert tcp any any -> any 1433 (msg:"LOCAL MS-SQL connection attempt"; flags:S; classtype:attempted-recon; sid:1000013; rev:1;)
+alert tcp any any -> any 3306 (msg:"LOCAL MySQL connection attempt"; flags:S; classtype:attempted-recon; sid:1000014; rev:1;)
+alert tcp any any -> any 5432 (msg:"LOCAL PostgreSQL connection attempt"; flags:S; classtype:attempted-recon; sid:1000015; rev:1;)
+alert tcp any any -> any 5900 (msg:"LOCAL VNC connection attempt"; flags:S; classtype:attempted-recon; sid:1000016; rev:1;)
+alert tcp any any -> any 6379 (msg:"LOCAL Redis connection attempt"; flags:S; classtype:attempted-recon; sid:1000017; rev:1;)
+
+# UDP services that are often probed.
+alert udp any any -> any 69 (msg:"LOCAL TFTP request"; classtype:attempted-recon; sid:1000018; rev:1;)
+alert udp any any -> any 161 (msg:"LOCAL SNMP request"; classtype:attempted-recon; sid:1000019; rev:1;)
+
+# More attacks in what a client sends.
+alert tcp any any -> any any (msg:"LOCAL Shellshock in a request"; flow:to_server,established; content:"() {"; classtype:attempted-admin; sid:1000020; rev:1;)
+alert tcp any any -> any any (msg:"LOCAL /etc/shadow in a request"; flow:to_server,established; content:"/etc/shadow"; classtype:attempted-user; sid:1000021; rev:1;)
+alert tcp any any -> any any (msg:"LOCAL SQL injection (UNION SELECT) in a request"; flow:to_server,established; content:"UNION SELECT"; classtype:web-application-attack; sid:1000022; rev:1;)
+alert tcp any any -> any any (msg:"LOCAL Script tag (XSS) in a request"; flow:to_server,established; content:"<script>"; classtype:web-application-attack; sid:1000023; rev:1;)
+alert tcp any any -> any any (msg:"LOCAL cmd.exe in a request"; flow:to_server,established; content:"cmd.exe"; classtype:attempted-admin; sid:1000024; rev:1;)

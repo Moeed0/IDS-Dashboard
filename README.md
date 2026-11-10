@@ -36,7 +36,7 @@ steps 1 and 2):
 
 `setup.sh` makes the Python environment, copies `.env.example` to `.env` for
 the engines it finds, builds the rule index, lets the collector read the
-engines' logs, puts the 12 basic local rules into both engines
+engines' logs, puts the 24 basic local rules into both engines
 (`--no-local-rules` leaves them out), saves their rule counts, and installs
 the collector and the dashboard as services that start at boot. Check `.env`'s paths afterwards;
 when one changes, run `./setup.sh` again (it keeps `.env`). It needs Python
@@ -169,11 +169,13 @@ Neither rule set is in this repository; each comes from its maker.
   Without an account, Snort's community rules (about 4,000) are free:
   `https://www.snort.org/downloads/community/snort3-community-rules.tar.gz`.
 
-- **Local rules (in this repository):** `deploy/rules/local.rules` holds 12
+- **Local rules (in this repository):** `deploy/rules/local.rules` holds 24
   basic rules that both engines load from the same text, so a matching
-  packet raises an alert from each: ping, the first packet of FTP, SSH,
-  Telnet, SMB and RDP connections, Nmap's scripts, sqlmap and Nikto in a
-  request, directory traversal and `/etc/passwd`. Their SIDs start at
+  packet raises an alert from each: ping; the first packet of FTP, SSH,
+  Telnet, SMB, RDP, MS-SQL, MySQL, PostgreSQL, VNC and Redis connections;
+  TFTP and SNMP requests; and in a request, Nmap's scripts, sqlmap, Nikto,
+  directory traversal, `/etc/passwd`, `/etc/shadow`, Shellshock,
+  `UNION SELECT`, `<script>` and `cmd.exe`. Their SIDs start at
   1000001 and their messages with "LOCAL". `setup.sh` puts them into the
   engines; `--no-local-rules` leaves them out. To put them in, or take them
   out, later:
