@@ -134,6 +134,7 @@ def create_app(
     off_periods: Callable[[], list[tuple[int, int]]] | None = None,
     stats_files: Mapping[str, Path | str] | None = None,
     export_max_alerts: int = EXPORT_MAX_ALERTS,
+    backup_dir: Path | str | None = None,
 ) -> Starlette:
     """The API over the live database at ``db_path``, answering requests
     that send ``token`` (every request when it is None), and the built React
@@ -211,7 +212,7 @@ def create_app(
     def status_screen(request: Request) -> Response:
         return JSONResponse(status(
             db_path, state_file, ids_sources, alert_retention=alert_retention, engines=engines,
-            stats_files=stats_files,
+            stats_files=stats_files, archive_dir=archive_dir, backup_dir=backup_dir,
         ))
 
     def live_chart(request: Request) -> Response:
@@ -426,6 +427,7 @@ def main(argv: list[str] | None = None) -> None:
             "suricata": settings.suricata_stats_file,
         },
         export_max_alerts=settings.export_max_alerts,
+        backup_dir=settings.backup_dir if settings.backup_keep else None,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

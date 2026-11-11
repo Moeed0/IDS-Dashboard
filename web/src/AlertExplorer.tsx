@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CombinedExport } from "./CombinedExport";
 import { OldAlerts } from "./OldAlerts";
 import {
@@ -20,6 +20,8 @@ import { stamp } from "./time";
 type Column = {
   title: string;
   value: (row: AlertRow) => string;
+  /** What the cell shows, when that is not the value as text. */
+  render?: (row: AlertRow) => ReactNode;
   className?: string;
   /** Shown on hover over the heading. */
   hint?: string;
@@ -33,14 +35,43 @@ const BOTH: Column = {
   className: "both",
   hint: "Both engines alerted on this packet",
 };
+// The alerts on one packet carry one number, in both engines' lists, and sit
+// together with one shade behind them.
+const PACKET: Column = {
+  title: "Packet",
+  value: (row) => String(row.packet ?? ""),
+  className: "number packet",
+  hint: "Alerts with the same number are on one packet",
+};
 const RULE: Column = { title: "Rule", value: ruleName, className: "rule", hint: "GID:SID:Rev" };
-const SEVERITY: Column = { title: "Severity", value: (row) => String(row.severity), className: "number" };
+const SEVERITY_WORDS = ["", "most severe", "high", "medium", "not critical"];
+// Three circles, filled as the alert is more severe: the engines count the
+// other way, 1 the most severe and 4 the least.
+const SEVERITY: Column = {
+  title: "Severity",
+  value: (row) => String(row.severity),
+  className: "severity",
+  hint: "Filled circles: 3 is severity 1 (the most severe), none is severity 4",
+  render: (row) => (
+    <span
+      className={`levels level-${row.severity}`}
+      role="img"
+      aria-label={`Severity ${row.severity}: ${SEVERITY_WORDS[row.severity] ?? ""}`}
+      title={`Severity ${row.severity}: ${SEVERITY_WORDS[row.severity] ?? ""}`}
+    >
+      {[1, 2, 3].map((circle) => (
+        <i key={circle} className={circle <= 4 - row.severity ? "filled" : undefined} />
+      ))}
+    </span>
+  ),
+};
 // The message comes last and takes the width the others leave, on one line:
 // a longer one ends in "…" and shows whole on hover.
 const MESSAGE: Column = { title: "Message", value: (row) => row.message, className: "message" };
-const PANEL_COLUMNS = [TIME, BOTH, RULE, SEVERITY, MESSAGE];
+const PANEL_COLUMNS = [TIME, PACKET, BOTH, RULE, SEVERITY, MESSAGE];
 const TABLE_COLUMNS: Column[] = [
   TIME,
+  PACKET,
   { title: "Engine", value: (row) => NAMES[row.engine] ?? row.engine },
   BOTH,
   RULE,
@@ -50,6 +81,27 @@ const TABLE_COLUMNS: Column[] = [
   { title: "Destination", value: (row) => row.dst ?? "" },
   MESSAGE,
 ];
+
+/**
+ * Which packets get the shade: every other one down the list. A packet keeps
+ * its shade from one refresh to the next while it can, so the shades move
+ * down with their rows when new alerts come in at the top.
+ */
+function usePacketShades(rows: AlertRow[]): Map<number, boolean> {
+  const remembered = useRef(new Map<number, boolean>());
+  const shades = new Map<number, boolean>();
+  let below: boolean | null = null;
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const packet = rows[index].packet ?? rows[index].id;
+    if (shades.has(packet)) continue;
+    let shade = remembered.current.get(packet);
+    if (shade === undefined || shade === below) shade = below === null ? false : !below;
+    shades.set(packet, shade);
+    below = shade;
+  }
+  remembered.current = shades;
+  return shades;
+}
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [settled, setSettled] = useState(value);
@@ -211,6 +263,7 @@ function AlertTable({
     page === 1 ? NEWEST_REFRESH_MS : 0,
   );
   const first = data ? (data.page - 1) * data.page_size + 1 : 0;
+  const shades = usePacketShades(data?.rows ?? []);
 
   return (
     <div className="panel">
@@ -260,12 +313,12 @@ function AlertTable({
               </thead>
               <tbody>
                 {data.rows.map((row) => (
-                  <tr key={row.id}>
+                  <tr key={row.id} className={shades.get(row.packet ?? row.id) ? "shaded" : undefined}>
                     {columns.map((column) => {
                       const text = column.value(row);
                       return (
                         <td key={column.title} className={column.className} title={column === MESSAGE ? text : undefined}>
-                          {text}
+                          {column.render ? column.render(row) : text}
                         </td>
                       );
                     })}

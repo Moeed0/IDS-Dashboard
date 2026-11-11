@@ -1388,6 +1388,23 @@ def both_engine_alerts(rows: Iterable[Mapping[str, Any]]) -> set[Any]:
     return {row_id for row_id, match in matches if id(match) in on_both}
 
 
+def alert_packets(rows: Iterable[Mapping[str, Any]]) -> dict[Any, tuple[Any, bool]]:
+    """For each row's ``id``: the packet its alert is on, named by the lowest
+    id of that packet's alerts, and whether both engines alerted on it,
+    matched as in the combined document. Nothing is stored: the same rows
+    give the same packets. The rows must hold the other alerts near each row
+    asked about: those within a millisecond of it."""
+    matches = [(row["id"], match) for row in rows if (match := _to_match(row)) is not None]
+    ids = {id(match): row_id for row_id, match in matches}
+    found = {}
+    for packet in _packets([match for _, match in matches]):
+        name = min(ids[id(match)] for match in packet.matches)
+        both = bool(packet.snort and packet.suricata)
+        for match in packet.matches:
+            found[ids[id(match)]] = (name, both)
+    return found
+
+
 def build_combined_detections(
     rows: Iterable[Mapping[str, Any]],
     *,

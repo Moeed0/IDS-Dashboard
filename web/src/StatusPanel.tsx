@@ -2,7 +2,7 @@
 // what is stored, each engine's dropped packets and its HOME_NET. The
 // engines and the collector, with their dots, head the Overview. The "… ago"
 // times count on between answers, and when none comes.
-import { ENGINES, NAMES, byEngine, count, machineTime, useNow, type Fetched, type Status } from "./api";
+import { ENGINES, NAMES, byEngine, count, machineTime, useNow, type Fetched, type Status, type Storage } from "./api";
 import { clock, duration } from "./time";
 
 // The collector stores alerts several times a minute on the lab network.
@@ -42,7 +42,26 @@ function summary(
       detail: saved === null ? "Nothing stored yet" : `Nothing stored for ${duration(machineNow - saved)}`,
     };
   }
+  if (data.storage && diskLow(data.storage)) {
+    return { level: "warn", label: "Disk almost full", detail: `${bytes(data.storage.disk_free)} free` };
+  }
   return { level: "ok", label: "Live", detail: "" };
+}
+
+/** 19.8 GB, 366 MB */
+function bytes(value: number): string {
+  return value >= 1e9 ? `${(value / 1e9).toFixed(1)} GB` : `${Math.round(value / 1e6)} MB`;
+}
+
+/** Under 2 GB or 5% of the disk: the database and the archive still grow. */
+function diskLow(storage: Storage): boolean {
+  return storage.disk_free < Math.max(2e9, storage.disk_total * 0.05);
+}
+
+/** The nightly backup is over a day and a half old. */
+function backupLate(storage: Storage, now: number): boolean {
+  const newest = storage.backups?.newest_ms;
+  return newest !== null && newest !== undefined && now - newest > 36 * 60 * 60 * 1000;
 }
 
 export function StatusPanel({ status }: { status: Fetched<Status> }) {
@@ -50,6 +69,7 @@ export function StatusPanel({ status }: { status: Fetched<Status> }) {
   const machineNow = machineTime(status, now) ?? now;
   const { level, label, detail } = summary(status, machineNow, now);
   const { data } = status;
+  const storage = data?.storage;
   const engines = data ? byEngine(data.engines) : [];
   const oldest = engines.map(([, info]) => info.oldest_ms).filter((ms): ms is number => ms !== null);
 
@@ -81,6 +101,25 @@ export function StatusPanel({ status }: { status: Fetched<Status> }) {
                   {NAMES[engine]} {info ? `${count(info.dropped)} of ${count(info.packets)}` : "not known"}
                 </div>
               ))}
+            </div>
+          )}
+          {storage && (
+            <div className="status-item">
+              <div className="status-name plain">Disk</div>
+              <div className={diskLow(storage) ? "error" : undefined}>
+                {bytes(storage.disk_free)} free of {bytes(storage.disk_total)}
+              </div>
+              <div className="muted">
+                alerts {bytes(storage.database)}
+                {storage.archive > 0 && ` · old alerts ${bytes(storage.archive)}`}
+              </div>
+              {storage.backups && (
+                <div className={backupLate(storage, machineNow) ? "error" : "muted"}>
+                  {storage.backups.newest_ms === null
+                    ? "no backup yet"
+                    : `backup ${duration(machineNow - storage.backups.newest_ms)} ago`}
+                </div>
+              )}
             </div>
           )}
           <div className="status-item">

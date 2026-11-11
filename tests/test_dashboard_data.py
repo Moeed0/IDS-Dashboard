@@ -296,6 +296,7 @@ def test_alert_list_pages_newest_first(tmp_path):
         # IPv6 in its short form, with brackets before the port.
         "src": "[fe80::2d37:6cf4:f5c8:64f7]:5353",
         "dst": "[ff02::fb]:5353",
+        "packet": 3,
         "both": False,
     }
     # "none" and "unknown" say nothing; an address without a port is alone.
@@ -361,6 +362,26 @@ def test_alert_list_marks_the_alerts_both_engines_raised_on_one_packet(tmp_path)
     assert [row["both"] for row in alerts(db_path, engine="suricata")["rows"]] == [True]
     # With one engine there is nothing to share a packet with.
     assert not any(row["both"] for row in alerts(db_path, engines=("snort",))["rows"])
+
+
+def test_alert_list_names_each_packet_and_keeps_its_rows_together(tmp_path):
+    db_path = tmp_path / "ids_live.db"
+    _database(db_path, _one_packet_alerts())
+
+    rows = alerts(db_path)["rows"]
+
+    # The DNS answer's two alerts share a packet, named by the lower id, and
+    # sit together, Snort's first; the ARP alert is a packet of its own.
+    by_rule = {(row["engine"], row["sid"]): row["packet"] for row in rows}
+    assert by_rule[("snort", 254)] == by_rule[("suricata", 2001119)] == min(
+        row["id"] for row in rows if row["sid"] in (254, 2001119)
+    )
+    assert by_rule[("snort", 1)] not in (by_rule[("snort", 254)],)
+    shared = [index for index, row in enumerate(rows) if row["packet"] == by_rule[("snort", 254)]]
+    assert shared[1] - shared[0] == 1
+    assert [rows[index]["engine"] for index in shared] == ["snort", "suricata"]
+    # Each engine's own list gives the packet the same name.
+    assert alerts(db_path, engine="suricata")["rows"][0]["packet"] == by_rule[("snort", 254)]
 
 
 def test_rule_pairs_are_the_last_hours_rules_on_one_packet(tmp_path):

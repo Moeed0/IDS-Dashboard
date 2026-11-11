@@ -1,0 +1,14 @@
+# A gzipped copy of the dashboard's database (scripts/backup_database.py),
+# started by ids-backup.timer. deploy/install-services.sh fills in @USER@
+# and @REPO_DIR@ and installs it in /etc/systemd/system.
+[Unit]
+Description=IDS dashboard database backup
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO_DIR@
+ExecStart=@REPO_DIR@/.venv/bin/python scripts/backup_database.py
+# Behind the engines and the collector for CPU and disk.
+Nice=19
+IOSchedulingClass=idle

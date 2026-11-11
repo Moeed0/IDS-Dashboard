@@ -144,6 +144,8 @@ export interface Status {
   engines: Partial<Record<Engine, EngineStatus>>;
   /** Each engine's packets and drops over the last hour; null when its statistics can't be read. */
   capture?: Partial<Record<Engine, Capture | null>>;
+  /** The disk the database is on, and what the alerts take, in bytes. */
+  storage?: Storage;
 }
 
 export interface AlertRow {
@@ -161,6 +163,8 @@ export interface AlertRow {
   service: string | null;
   src: string | null;
   dst: string | null;
+  /** Its packet: the same number on every alert on that packet, in every list. */
+  packet?: number;
   /** Both engines alerted on its packet. */
   both: boolean;
 }
@@ -184,6 +188,15 @@ export interface ExportWindow {
   max_alerts?: number;
   /** The window starts before the database's oldest alert: older ones come from the archive. */
   from_archive?: boolean;
+}
+
+export interface Storage {
+  disk_free: number;
+  disk_total: number;
+  database: number;
+  archive: number;
+  /** The nightly backups; null when they are off. */
+  backups: { count: number; bytes: number; newest_ms: number | null } | null;
 }
 
 /** An engine's packets and drops over the last hour (minutes covered). */

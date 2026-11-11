@@ -185,7 +185,7 @@ else
     fi
 fi
 
-echo "== 7. The collector and the dashboard as services (sudo)"
+echo "== 7. The collector, the dashboard and the nightly backup as services (sudo)"
 sudo deploy/install-services.sh > /dev/null
 # Started now if they weren't running; started again if they were, so that
 # they read this setup's settings and files.

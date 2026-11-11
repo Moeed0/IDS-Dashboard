@@ -1,0 +1,12 @@
+# Runs ids-backup.service every night at 03:30, and at the next start when
+# the machine was off then.
+[Unit]
+Description=Nightly IDS dashboard database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

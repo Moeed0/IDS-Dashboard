@@ -9,6 +9,10 @@ It runs on an Ubuntu VM in a lab today. It is set up so that it can move to
 a Raspberry Pi and run one engine or both (see
 [docs/modular-setup-plan.md](docs/modular-setup-plan.md)).
 
+![The Overview: engine and collector status, the last hour, alerts over the last 24 hours and the top rules](docs/images/overview.png)
+
+![The Alert Explorer: Snort's and Suricata's alerts side by side, grouped by packet](docs/images/alert-explorer.png)
+
 ## Quick start
 
 On an Ubuntu machine where Snort 3, Suricata 8 or both are installed and
@@ -101,6 +105,7 @@ network interface (afpacket)
 | `config/lab_phases.json` | The lab's attacker addresses, for the dashboard's warnings |
 | `data/` | Data each machine builds or downloads ([data/README.md](data/README.md)) |
 | `alert-archive/` | The alerts older than the database keeps, in 10-day zips (see [Old alerts](#old-alerts)) |
+| `backups/` | The nightly copies of the alert database (see [Backups](#backups)) |
 | `tests/` | The tests |
 | `.github/workflows/` | On GitHub: the tests and the page's build on every push, and a release zip with the page built for each version tag |
 | `docs/` | The API and data ([docs/react-native-port.md](docs/react-native-port.md)), the export format and the modular plan |
@@ -318,9 +323,30 @@ unzip -p alert-archive/alerts_2026-11-03_to_2026-11-12.zip 2026-11-05.jsonl | he
 zcat alert-archive/days/2026-11-13.jsonl.gz | head -3
 ```
 
+## Backups
+
+Every night at 03:30 (or at the next start, when the machine was off then)
+the `ids-backup` timer makes a gzipped copy of the alert database in
+`backups/` (`IDS_BACKUP_DIR`) and keeps the newest 3 (`IDS_BACKUP_KEEP`; 0
+makes none). A copy is about a tenth of the database's size. The status
+panel shows the free disk space and how old the newest backup is. To make
+one now, or to restore one (stop the collector and the dashboard first):
+
+```bash
+.venv/bin/python scripts/backup_database.py
+```
+
+```bash
+gunzip -c backups/ids_live-20261110-033000.db.gz > ids_live.db
+```
+
 ## Tests
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
+
+## License
+
+MIT; see [LICENSE](LICENSE).

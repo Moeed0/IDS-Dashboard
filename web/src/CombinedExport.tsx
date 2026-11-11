@@ -70,7 +70,12 @@ export function CombinedExport({ options, onUnauthorized }: { options: Options; 
 
   return (
     <section className="export">
-      <h2>Combined JSON</h2>
+      <h2>Download: combined JSON</h2>
+      {/* Said outright: the list's filters above read as if they applied here too. */}
+      <p className="muted">
+        One file with every alert in the time window chosen here. The list's time range and search above don't
+        change it.
+      </p>
       <div className="filters">
         <label>
           Length
@@ -100,8 +105,8 @@ export function CombinedExport({ options, onUnauthorized }: { options: Options; 
       </div>
       {error && <p className="error">{error}</p>}
       {exportWindow && (
-        <p className="muted">
-          {stamp(exportWindow.start_ms)} → {stamp(exportWindow.end_ms)} PKT
+        <p>
+          <strong>The file covers</strong> {stamp(exportWindow.start_ms)} → {stamp(exportWindow.end_ms)} PKT
           {exportWindow.moved_back && " · moved back to the latest complete time"}
           {exportWindow.stored_alerts !== undefined && ` · ${count(exportWindow.stored_alerts)} alerts in the database`}
           {exportWindow.from_archive && ", older ones from the archive"}
@@ -119,6 +124,7 @@ export function CombinedExport({ options, onUnauthorized }: { options: Options; 
       {shown && !total && <p className="muted">No alerts in this window.</p>}
       {shown && total > 0 && (
         <>
+          <h3>In this file</h3>
           <div className="tiles">
             <Tile label="Alerts" value={count(total)} />
             {engines.length > 1 &&

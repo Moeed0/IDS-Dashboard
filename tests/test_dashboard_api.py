@@ -172,7 +172,7 @@ def test_the_status_says_what_runs_and_when_alerts_were_stored(db_path, tmp_path
     data = json.loads(body)
     assert set(data) == {
         "checked_ms", "running", "collector_saved_ms", "complete_end_ms", "alert_retention",
-        "engines", "capture",
+        "engines", "capture", "storage",
     }
     # No statistics files given.
     assert data["capture"] == {}

@@ -8,6 +8,7 @@ Nothing here holds a secret; the API token stays in `.env`.
 |---|---|---|
 | `systemd/ids-collector.service` | `/etc/systemd/system/` by `install-services.sh` | Runs the collector at boot and after a crash |
 | `systemd/ids-dashboard.service` | `/etc/systemd/system/` by `install-services.sh` | Runs the dashboard and its API on port 8501 |
+| `systemd/ids-backup.service`, `ids-backup.timer` | `/etc/systemd/system/` by `install-services.sh` | A gzipped copy of the alert database every night at 03:30, or at the next start (`scripts/backup_database.py`) |
 | `systemd/snort-lab.service` | `/etc/systemd/system/snort-lab.service` | Runs Snort on the capture interface |
 | `systemd/snort-lab.service.d/daq-afpacket.conf` | `/etc/systemd/system/snort-lab.service.d/` | Snort reads packets with afpacket, so alerts are written at once |
 | `suricata/modify.conf` | `/etc/suricata/modify.conf` | `suricata-update` removes rule thresholds, so every match is logged |

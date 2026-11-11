@@ -274,6 +274,15 @@ screen (above the screen on a narrow one):
              "suricata": {"packets": 4280, "dropped": 0, "minutes": 60}}}
 ```
 
+`storage` (not in the example above) is `{"disk_free", "disk_total",
+"database", "archive", "backups"}` in bytes: the disk the database is on,
+the database with its write-ahead log, the alert archive, and
+`backups: {"count", "bytes", "newest_ms"}` for the nightly backups (`null`
+when `IDS_BACKUP_KEEP` is 0). The panel shows "Disk: 19.8 GB free of 52.5
+GB", what the alerts take, and how old the newest backup is. Under 2 GB or
+5% free the line turns red and the panel's headline says "Disk almost
+full"; a backup over 36 hours old turns red too.
+
 `capture` is each engine's packets and dropped packets over the last hour
 (`minutes` covered, fewer after it started), from the statistics the
 engines write every minute: Snort's perf_monitor file
@@ -343,6 +352,18 @@ When the IDS machine or its API stops answering:
   which the screens show as `gid:sid:rev`. `severity` is 1
   (most severe) to 4. `src` and `dst` are `address:port`, `[IPv6]:port`, the
   address alone (no ports), or `null` (no IP addresses, such as ARP).
+- `packet` names the row's packet: the lowest `id` of the alerts on it, so
+  every alert on one packet has the same number, in each engine's list and
+  the combined one. It is worked out when the list is read, as `both` is,
+  and not stored. A page's rows are grouped by packet: the packets in the
+  order of their newest row, each packet's rows together (Snort's first).
+  The dashboard shows it as a Packet column and gives every other packet's
+  rows a light shade, so the rows of one packet read as one; a packet keeps
+  its shade from one refresh to the next. A packet whose alerts fall on two
+  pages has rows on both.
+- `severity` is shown as three circles, filled as the alert is more severe:
+  3 filled (red) is severity 1, 2 (orange) is 2, 1 (amber) is 3, and none is
+  4, not critical. The number is in the hover text.
 - `both` is `true` when both engines alerted on the row's packet, matched
   as for the Overview's "Both engines" among the alerts stored within a
   millisecond of it; always `false` with one engine.
@@ -409,6 +430,11 @@ Below the combined export: `GET /archive`, when the screen opens.
   copy.
 
 ## Combined JSON export
+
+The section is headed "Download: combined JSON" and says that the file holds
+every alert in its own time window, whatever the list's time range and
+search are; the window reads "The file covers … → …", and the counts of a
+built file stand under "In this file".
 
 1. `GET /export/window?length=15 minutes` gives `start_ms`, `end_ms` and
    `complete_end_ms`, for the screen to show. With `end_ms` the user's chosen

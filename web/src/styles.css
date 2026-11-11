@@ -18,6 +18,10 @@
   --ok-ring: rgba(26, 127, 55, 0.35);
   --snort: #2a78d6;
   --suricata: #eb6834;
+  --shade: #eeeeea;
+  --severe: #c62828;
+  --high: #d9620f;
+  --medium: #a37a00;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -38,6 +42,10 @@
     --ok-ring: rgba(63, 185, 80, 0.35);
     --snort: #3987e5;
     --suricata: #d95926;
+    --shade: #1f2630;
+    --severe: #ff6b61;
+    --high: #f0883e;
+    --medium: #d4a72c;
   }
 }
 
@@ -94,6 +102,52 @@ main p {
 .section-head select,
 .section-head button {
   padding: 2px 8px;
+}
+
+/* Every other packet's rows, so that the rows of one packet read as one. */
+tr.shaded td {
+  background: var(--shade);
+}
+
+.packet {
+  min-width: calc(7ch + 16px);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Severity as three circles, filled as the alert is more severe. */
+.severity {
+  white-space: nowrap;
+}
+
+.levels {
+  display: inline-flex;
+  gap: 3px;
+  vertical-align: middle;
+  color: var(--muted);
+}
+
+.levels i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+
+.levels i.filled {
+  background: currentColor;
+}
+
+.level-1 {
+  color: var(--severe);
+}
+
+.level-2 {
+  color: var(--high);
+}
+
+.level-3 {
+  color: var(--medium);
 }
 
 /* A time the machine was off, shaded on a chart. */

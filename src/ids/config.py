@@ -150,6 +150,9 @@ class Settings:
     suricata_stats_file: Path
     # The most alerts one combined export holds (memory: about 8 KB each).
     export_max_alerts: int
+    # The nightly gzipped copies of the database, and how many stay (0: none).
+    backup_dir: Path
+    backup_keep: int
     # The engines this machine runs (IDS_ENGINES), in KNOWN_ENGINES order.
     engines: tuple[str, ...]
     # Each engine's rules (one file, or a folder of .rules files) and its
@@ -244,6 +247,15 @@ def get_settings() -> Settings:
             "IDS_EXPORT_MAX_ALERTS",
             150000,
             minimum=1,
+        ),
+        backup_dir=_path_from_env(
+            "IDS_BACKUP_DIR",
+            "backups",
+        ),
+        backup_keep=_int_from_env(
+            "IDS_BACKUP_KEEP",
+            3,
+            minimum=0,
         ),
         engines=_engines_from_env(),
         snort_rules=_path_from_env(
