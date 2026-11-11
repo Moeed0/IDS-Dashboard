@@ -10,7 +10,7 @@ const QUIET_MS = 5 * 60 * 1000;
 
 type Level = "ok" | "warn" | "down" | "unknown";
 
-function summary(
+export function summary(
   { data, error, receivedMs }: Fetched<Status>,
   machineNow: number,
   now: number,
@@ -42,6 +42,9 @@ function summary(
       detail: saved === null ? "Nothing stored yet" : `Nothing stored for ${duration(machineNow - saved)}`,
     };
   }
+  if (data.storage?.backups?.problem) {
+    return { level: "down", label: "Database damaged", detail: data.storage.backups.problem };
+  }
   if (data.storage && diskLow(data.storage)) {
     return { level: "warn", label: "Disk almost full", detail: `${bytes(data.storage.disk_free)} free` };
   }
@@ -54,12 +57,12 @@ function bytes(value: number): string {
 }
 
 /** Under 2 GB or 5% of the disk: the database and the archive still grow. */
-function diskLow(storage: Storage): boolean {
+export function diskLow(storage: Storage): boolean {
   return storage.disk_free < Math.max(2e9, storage.disk_total * 0.05);
 }
 
 /** The nightly backup is over a day and a half old. */
-function backupLate(storage: Storage, now: number): boolean {
+export function backupLate(storage: Storage, now: number): boolean {
   const newest = storage.backups?.newest_ms;
   return newest !== null && newest !== undefined && now - newest > 36 * 60 * 60 * 1000;
 }
@@ -118,6 +121,12 @@ export function StatusPanel({ status }: { status: Fetched<Status> }) {
                   {storage.backups.newest_ms === null
                     ? "no backup yet"
                     : `backup ${duration(machineNow - storage.backups.newest_ms)} ago`}
+                  {storage.backups.checked_ms !== null && storage.backups.problem === null && ", database OK"}
+                </div>
+              )}
+              {storage.backups?.problem && (
+                <div className="error" title={storage.backups.problem}>
+                  Database damaged: run scripts/restore_backup.py
                 </div>
               )}
             </div>

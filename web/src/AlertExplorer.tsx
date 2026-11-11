@@ -45,6 +45,22 @@ const PACKET: Column = {
 };
 const RULE: Column = { title: "Rule", value: ruleName, className: "rule", hint: "GID:SID:Rev" };
 const SEVERITY_WORDS = ["", "most severe", "high", "medium", "not critical"];
+
+/** How many of the three circles are filled: 3 for severity 1, none for 4. */
+export function filledCircles(severity: number): number {
+  return Math.min(3, Math.max(0, 4 - severity));
+}
+
+export function SeverityCircles({ severity }: { severity: number }) {
+  const words = `Severity ${severity}: ${SEVERITY_WORDS[severity] ?? ""}`;
+  return (
+    <span className={`levels level-${severity}`} role="img" aria-label={words} title={words}>
+      {[1, 2, 3].map((circle) => (
+        <i key={circle} className={circle <= filledCircles(severity) ? "filled" : undefined} />
+      ))}
+    </span>
+  );
+}
 // Three circles, filled as the alert is more severe: the engines count the
 // other way, 1 the most severe and 4 the least.
 const SEVERITY: Column = {
@@ -52,18 +68,7 @@ const SEVERITY: Column = {
   value: (row) => String(row.severity),
   className: "severity",
   hint: "Filled circles: 3 is severity 1 (the most severe), none is severity 4",
-  render: (row) => (
-    <span
-      className={`levels level-${row.severity}`}
-      role="img"
-      aria-label={`Severity ${row.severity}: ${SEVERITY_WORDS[row.severity] ?? ""}`}
-      title={`Severity ${row.severity}: ${SEVERITY_WORDS[row.severity] ?? ""}`}
-    >
-      {[1, 2, 3].map((circle) => (
-        <i key={circle} className={circle <= 4 - row.severity ? "filled" : undefined} />
-      ))}
-    </span>
-  ),
+  render: (row) => <SeverityCircles severity={row.severity} />,
 };
 // The message comes last and takes the width the others leave, on one line:
 // a longer one ends in "…" and shows whole on hover.
@@ -89,17 +94,24 @@ const TABLE_COLUMNS: Column[] = [
  */
 function usePacketShades(rows: AlertRow[]): Map<number, boolean> {
   const remembered = useRef(new Map<number, boolean>());
+  remembered.current = packetShades(rows, remembered.current);
+  return remembered.current;
+}
+
+/** Which packets' rows are shaded, from the bottom of the list up: every
+ * other packet, each keeping the shade it had in ``previous`` (the last
+ * refresh) unless that would match the packet below it. */
+export function packetShades(rows: AlertRow[], previous: Map<number, boolean>): Map<number, boolean> {
   const shades = new Map<number, boolean>();
   let below: boolean | null = null;
   for (let index = rows.length - 1; index >= 0; index--) {
     const packet = rows[index].packet ?? rows[index].id;
     if (shades.has(packet)) continue;
-    let shade = remembered.current.get(packet);
+    let shade = previous.get(packet);
     if (shade === undefined || shade === below) shade = below === null ? false : !below;
     shades.set(packet, shade);
     below = shade;
   }
-  remembered.current = shades;
   return shades;
 }
 

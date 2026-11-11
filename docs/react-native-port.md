@@ -277,11 +277,15 @@ screen (above the screen on a narrow one):
 `storage` (not in the example above) is `{"disk_free", "disk_total",
 "database", "archive", "backups"}` in bytes: the disk the database is on,
 the database with its write-ahead log, the alert archive, and
-`backups: {"count", "bytes", "newest_ms"}` for the nightly backups (`null`
-when `IDS_BACKUP_KEEP` is 0). The panel shows "Disk: 19.8 GB free of 52.5
+`backups: {"count", "bytes", "newest_ms", "checked_ms", "problem"}` for the
+nightly backups (`null` when `IDS_BACKUP_KEEP` is 0); `checked_ms` is when
+the database was last checked, before a backup, and `problem` what the check
+found (`null` when whole; both `null` before the first check). The panel shows "Disk: 19.8 GB free of 52.5
 GB", what the alerts take, and how old the newest backup is. Under 2 GB or
 5% free the line turns red and the panel's headline says "Disk almost
-full"; a backup over 36 hours old turns red too.
+full"; a backup over 36 hours old turns red too. The backup line ends
+", database OK" after a passed check; a `problem` is a red "Database damaged:
+run scripts/restore_backup.py" line and the headline "Database damaged".
 
 `capture` is each engine's packets and dropped packets over the last hour
 (`minutes` covered, fewer after it started), from the statistics the

@@ -1,6 +1,8 @@
 # Rotates Snort's alert log weekly; installed as /etc/logrotate.d/snort.
 # copytruncate keeps the file Snort writes to, and the collector notices
-# the truncation and reads the new lines from the start. perf_monitor
+# the truncation: it reads what it hadn't yet from the copy
+# (alert_json.txt.1, or the .gz copies after a longer stop), then the new
+# lines from the start (src/ids/rotated_logs.py). perf_monitor
 # rolls its own file (perf_monitor.max_file_size).
 /var/log/snort/alert_json.txt {
     weekly

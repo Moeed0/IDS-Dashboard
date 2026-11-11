@@ -326,18 +326,40 @@ zcat alert-archive/days/2026-11-13.jsonl.gz | head -3
 ## Backups
 
 Every night at 03:30 (or at the next start, when the machine was off then)
-the `ids-backup` timer makes a gzipped copy of the alert database in
-`backups/` (`IDS_BACKUP_DIR`) and keeps the newest 3 (`IDS_BACKUP_KEEP`; 0
-makes none). A copy is about a tenth of the database's size. The status
-panel shows the free disk space and how old the newest backup is. To make
-one now, or to restore one (stop the collector and the dashboard first):
+the `ids-backup` timer checks the alert database (SQLite's quick_check, about
+10 seconds for 500 MB) and makes a gzipped copy of it in `backups/`
+(`IDS_BACKUP_DIR`), keeping the newest 3 (`IDS_BACKUP_KEEP`; 0 makes none). A
+copy is about a tenth of the database's size. A damaged database isn't
+copied, so it never pushes out the good backups. The status panel shows the
+free disk space, how old the newest backup is and whether the database
+passed its check. To make one now:
 
 ```bash
 .venv/bin/python scripts/backup_database.py
 ```
 
+The database is written with `synchronous=FULL`, so switching the machine
+off mid-write shouldn't damage it. If it is damaged all the same (the
+dashboard says "the database is damaged", the collector keeps restarting),
+put the newest backup back. Stop the collector and the dashboard:
+
 ```bash
-gunzip -c backups/ids_live-20261110-033000.db.gz > ids_live.db
+sudo systemctl stop ids-collector ids-dashboard
+```
+
+Restore (it checks the backup first, keeps the damaged database as
+`ids_live-replaced-<time>.db`, and has the collector read the engines' logs
+again from the start; name a backup to restore an older one):
+
+```bash
+.venv/bin/python scripts/restore_backup.py
+```
+
+Start them again: the collector stores the alerts made since the backup that
+the logs still hold, and skips the ones the backup has:
+
+```bash
+sudo systemctl start ids-collector ids-dashboard
 ```
 
 ## Tests
@@ -345,6 +367,13 @@ gunzip -c backups/ids_live-20261110-033000.db.gz > ids_live.db
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 PYTHONPATH=src .venv/bin/python -m pytest -q
+```
+
+The page's tests (the packet shading, the severity circles and the status
+panel's headline), in `web/`, after `npm ci`:
+
+```bash
+npm test
 ```
 
 ## License

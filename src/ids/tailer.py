@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from ids.rotated_logs import missed_lines
+
 
 FINGERPRINT_BYTES = 256
 
@@ -36,6 +38,10 @@ class PersistentJsonTailer:
     The read cursor is kept in memory so normal polling does not reread data.
     Persisted state advances only after the caller acknowledges successful
     processing.
+
+    When the log was rotated (while running, or while stopped), the next
+    poll first delivers what was missed from the rotated copies
+    (ids.rotated_logs), then the new log from its start.
     """
 
     def __init__(
@@ -64,6 +70,9 @@ class PersistentJsonTailer:
         self._read_offset: int | None = None
         self._read_fingerprint: str | None = None
         self._read_fingerprint_length: int = 0
+        # Where reading stopped in the log before it was rotated: offset,
+        # fingerprint and its length; None when there is nothing to catch up.
+        self._missed: tuple[int, str | None, int] | None = None
 
     def _load_state(self) -> dict[str, dict]:
         if not self.state_file.exists():
@@ -268,6 +277,7 @@ class PersistentJsonTailer:
 
         # Rename/recreate rotation.
         if saved_inode != inode:
+            self._missed_from(saved, saved_offset)
             fingerprint, fingerprint_length = (
                 self._fingerprint_for_size(size)
             )
@@ -279,6 +289,7 @@ class PersistentJsonTailer:
 
         # Classic copytruncate case.
         if size < saved_offset:
+            self._missed_from(saved, saved_offset)
             fingerprint, fingerprint_length = (
                 self._fingerprint_for_size(size)
             )
@@ -295,6 +306,7 @@ class PersistentJsonTailer:
             saved,
             size,
         ):
+            self._missed_from(saved, saved_offset)
             fingerprint, fingerprint_length = (
                 self._fingerprint_for_size(size)
             )
@@ -322,6 +334,25 @@ class PersistentJsonTailer:
             saved_offset,
             fingerprint,
             fingerprint_length,
+        )
+
+    def _missed_from(self, saved: dict, offset: int) -> None:
+        """The log was rotated since ``saved`` was acknowledged."""
+        fingerprint = saved.get("fingerprint")
+        length = saved.get("fingerprint_length")
+        self._missed = (
+            offset,
+            fingerprint if isinstance(fingerprint, str) else None,
+            length if isinstance(length, int) else 0,
+        )
+
+    def _missed_from_reading(self) -> None:
+        """The log was rotated while it was being read."""
+        assert self._read_offset is not None
+        self._missed = (
+            self._read_offset,
+            self._read_fingerprint,
+            self._read_fingerprint_length,
         )
 
     def _initialize_read_position(self) -> None:
@@ -368,6 +399,7 @@ class PersistentJsonTailer:
 
         # New inode: rename/recreate rotation.
         if inode != self._read_inode:
+            self._missed_from_reading()
             (
                 self._read_fingerprint,
                 self._read_fingerprint_length,
@@ -379,6 +411,7 @@ class PersistentJsonTailer:
 
         # Same inode became smaller.
         if size < self._read_offset:
+            self._missed_from_reading()
             (
                 self._read_fingerprint,
                 self._read_fingerprint_length,
@@ -395,6 +428,7 @@ class PersistentJsonTailer:
             and self._read_fingerprint_length > 0
         ):
             if size < self._read_fingerprint_length:
+                self._missed_from_reading()
                 (
                     self._read_fingerprint,
                     self._read_fingerprint_length,
@@ -408,6 +442,7 @@ class PersistentJsonTailer:
             )
 
             if current != self._read_fingerprint:
+                self._missed_from_reading()
                 (
                     self._read_fingerprint,
                     self._read_fingerprint_length,
@@ -431,6 +466,10 @@ class PersistentJsonTailer:
         Persisted state advances only when acknowledge() is called.
 
         A final line without a newline is left unread.
+
+        After a rotation, the lines missed in the rotated copies come first,
+        each with offset 0 of the new log: acknowledging that means the
+        copies are done.
         """
         self._synchronize_read_position()
 
@@ -440,6 +479,12 @@ class PersistentJsonTailer:
         inode = self._read_inode
         offset = self._read_offset
         delivered = 0
+
+        if self._missed is not None:
+            for line in missed_lines(self.path, *self._missed):
+                callback(line, inode, 0)
+                delivered += 1
+            self._missed = None
 
         with self.path.open(
             "r",

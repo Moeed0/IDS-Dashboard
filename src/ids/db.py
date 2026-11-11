@@ -48,7 +48,10 @@ def connect_database(
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    # FULL syncs the log at every commit, not only at checkpoints: a little
+    # slower, but a VM switched off mid-write keeps a whole database (one
+    # was damaged that way on 11 Nov 2026 under NORMAL).
+    conn.execute("PRAGMA synchronous=FULL")
 
     _restore_sudo_user_ownership(db_path)
 

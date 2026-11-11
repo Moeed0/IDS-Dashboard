@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import os
+import re
 import secrets
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
@@ -59,6 +60,8 @@ from ids.uptime import machine_off_periods
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIST = PROJECT_ROOT / "web" / "dist"
 DEFAULT_EXPORT_LENGTH = "15 minutes"
+# SQLite's words for a damaged database file.
+DAMAGED = re.compile(r"malformed|not a database|corrupt", re.IGNORECASE)
 # The export's window and counts, for an app that does not read the whole
 # file to show them.
 EXPORT_HEADERS = (
@@ -172,9 +175,10 @@ def create_app(
             except BadRequest as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             except sqlite3.Error as exc:
-                return JSONResponse(
-                    {"error": f"could not read the live database: {exc}"}, status_code=503
-                )
+                error = f"could not read the live database: {exc}"
+                if isinstance(exc, sqlite3.DatabaseError) and DAMAGED.search(str(exc)):
+                    error += " (the database is damaged: restore a backup with scripts/restore_backup.py)"
+                return JSONResponse({"error": error}, status_code=503)
 
         return endpoint
 

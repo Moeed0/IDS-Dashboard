@@ -195,8 +195,15 @@ export interface Storage {
   disk_total: number;
   database: number;
   archive: number;
-  /** The nightly backups; null when they are off. */
-  backups: { count: number; bytes: number; newest_ms: number | null } | null;
+  /** The nightly backups, and the database check made before each (when,
+   * and the problem found; both null before the first); null when they are off. */
+  backups: {
+    count: number;
+    bytes: number;
+    newest_ms: number | null;
+    checked_ms: number | null;
+    problem: string | null;
+  } | null;
 }
 
 /** An engine's packets and drops over the last hour (minutes covered). */

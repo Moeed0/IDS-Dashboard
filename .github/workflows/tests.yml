@@ -1,5 +1,5 @@
-# On every push to main and every pull request: the Python tests, and the
-# page's build (which type-checks it). The tests that need this machine's
+# On every push to main and every pull request: the Python tests, the
+# page's tests, and its build (which type-checks it). The tests that need this machine's
 # rule index or threat-intel database skip without them.
 name: Tests
 
@@ -29,6 +29,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Build the page
+      - name: Page tests and build
         working-directory: web
-        run: npm ci && npm run build
+        run: npm ci && npm test && npm run build

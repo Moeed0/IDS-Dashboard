@@ -17,7 +17,7 @@ Nothing here holds a secret; the API token stays in `.env`.
 | `rules/local.rules` | `/usr/local/etc/snort/local.rules` and `/etc/suricata/rules/local.rules` by `install-local-rules.sh` | 24 basic rules both engines load from the same text (SIDs from 1000001, messages "LOCAL …") |
 | `install-local-rules.sh` | | Puts the local rules into both engines (`--remove` empties them again): adds the files to Suricata's `rule-files` and Snort's rules when missing, checks both engines, reloads Suricata while it runs, restarts Snort, and updates the dashboard's rule counts and rule index. `setup.sh` runs it |
 | `apply-snort-config.sh` | | Installs `snort/snort.lua`, checks it with `snort -T`, restarts Snort, and puts the old settings back if either step fails |
-| `logrotate/snort` | `/etc/logrotate.d/snort` | Rotates Snort's alert log weekly |
+| `logrotate/snort` | `/etc/logrotate.d/snort` | Rotates Snort's alert log weekly; the collector reads what it missed from the rotated copies |
 
 Install the collector and the dashboard as services, as the user that owns
 this folder (stop any copies started by hand first):

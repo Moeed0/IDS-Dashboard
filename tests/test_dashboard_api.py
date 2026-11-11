@@ -406,3 +406,15 @@ def test_the_charts_show_when_the_machine_was_off(db_path):
     assert day["off"] == [[_ms(2026, 11, 3, 12, 0), _ms(2026, 11, 3, 12, 30)]]
     # The past boots are read once.
     assert reads == [1]
+
+
+def test_a_damaged_database_says_how_to_restore(tmp_path):
+    damaged = tmp_path / "damaged.db"
+    damaged.write_bytes(b"not a database at all" * 100)
+
+    status, _, body = _get(_app(damaged), "/overview")
+
+    assert status == 503
+    assert "scripts/restore_backup.py" in json.loads(body)["error"]
+    # A missing file isn't damage.
+    assert "restore" not in json.loads(_get(_app(tmp_path / "missing.db"), "/overview")[2])["error"]
