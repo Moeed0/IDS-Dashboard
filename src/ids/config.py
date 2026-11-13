@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from collections.abc import Mapping
@@ -127,6 +128,22 @@ def llm_target() -> tuple[str | None, str | None]:
     if url is not None and not url.lower().startswith(("http://", "https://")):
         raise ValueError(f"IDS_LLM_URL must start with http:// or https://, got {url!r}")
     return url, _value_from_env("IDS_LLM_TOKEN", "").strip() or None
+
+
+def test_alert_target() -> str | None:
+    """
+    The machine the hourly test alert pings (IDS_TEST_ALERT_TARGET): an IPv4
+    address on the capture network, which must exist but need not answer
+    (src/ids/test_alert.py). None when not set: no test.
+    """
+    value = _value_from_env("IDS_TEST_ALERT_TARGET", "").strip()
+    if not value:
+        return None
+    try:
+        ipaddress.IPv4Address(value)
+    except ValueError:
+        raise ValueError(f"IDS_TEST_ALERT_TARGET must be an IPv4 address, got {value!r}") from None
+    return value
 
 
 def api_token_required() -> bool:

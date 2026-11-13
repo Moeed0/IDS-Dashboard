@@ -151,6 +151,20 @@ export interface Status {
   capture?: Partial<Record<Engine, Capture | null>>;
   /** The disk the database is on, and what the alerts take, in bytes. */
   storage?: Storage;
+  /** The last hourly test alert (scripts/send_test_alert.py); null when none. */
+  test_alert?: TestAlert | null;
+}
+
+/** One hourly test: a ping out of the capture card, and each engine's
+ * alert on it once stored (null when none came in time). */
+export interface TestAlert {
+  sent_ms: number;
+  source: string;
+  target: string;
+  answered: boolean;
+  wait_seconds: number;
+  engines: Partial<Record<Engine, { rule: string; time_ms: number; stored_after_s: number } | null>>;
+  ok: boolean;
 }
 
 export interface AlertRow {

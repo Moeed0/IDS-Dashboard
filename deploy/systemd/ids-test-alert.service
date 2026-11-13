@@ -1,0 +1,15 @@
+# The hourly test alert (scripts/send_test_alert.py): one ping to
+# IDS_TEST_ALERT_TARGET out of the capture card, then a wait of up to 90 s
+# for each engine's alert on it to be stored. Started by
+# ids-test-alert.timer. deploy/install-services.sh fills in @USER@ and
+# @REPO_DIR@ and installs it in /etc/systemd/system.
+[Unit]
+Description=IDS hourly test alert
+After=ids-collector.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO_DIR@
+ExecStart=@REPO_DIR@/.venv/bin/python scripts/send_test_alert.py
+Nice=10

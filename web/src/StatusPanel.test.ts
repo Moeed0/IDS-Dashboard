@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Fetched, Status, Storage } from "./api";
-import { backupLate, diskLow, summary } from "./StatusPanel";
+import type { Fetched, Status, Storage, TestAlert } from "./api";
+import { backupLate, diskLow, summary, testMissed } from "./StatusPanel";
 
 const NOW = Date.UTC(2026, 10, 11, 12, 0);
 const HOUR = 60 * 60 * 1000;
@@ -70,5 +70,34 @@ describe("the disk and the backup", () => {
     expect(backupLate(storage({}, { newest_ms: NOW - 30 * HOUR }), NOW)).toBe(false);
     expect(backupLate(storage({}, { newest_ms: null }), NOW)).toBe(false);
     expect(backupLate(storage({ backups: null }), NOW)).toBe(false);
+  });
+});
+
+describe("the hourly test alert", () => {
+  function test(sentMs: number, suricata: boolean): TestAlert {
+    const alert = { rule: "1:366", time_ms: sentMs, stored_after_s: 1 };
+    return {
+      sent_ms: sentMs, source: "192.168.50.142", target: "192.168.50.1", answered: true, wait_seconds: 90,
+      engines: { snort: alert, suricata: suricata ? { ...alert, rule: "1:2100366" } : null },
+      ok: suricata,
+    };
+  }
+
+  it("is quiet in the headline when every engine alerted", () => {
+    expect(summary(status({ test_alert: test(NOW - HOUR / 2, true) }), NOW, NOW).label).toBe("Live");
+  });
+
+  it("names the engine that missed the last test", () => {
+    const missed = status({ test_alert: test(NOW - HOUR / 2, false) });
+
+    expect(testMissed(missed.data!, NOW)).toEqual(["suricata"]);
+    expect(summary(missed, NOW, NOW)).toEqual({
+      level: "warn", label: "Test alert missed", detail: "No alert from Suricata on the last hourly test",
+    });
+  });
+
+  it("says nothing about now from a test over two hours old, or none", () => {
+    expect(testMissed(status({ test_alert: test(NOW - 3 * HOUR, false) }).data!, NOW)).toEqual([]);
+    expect(testMissed(status({ test_alert: null }).data!, NOW)).toEqual([]);
   });
 });

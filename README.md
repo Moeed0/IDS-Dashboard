@@ -361,6 +361,22 @@ passed its check. To make one now:
 .venv/bin/python scripts/backup_database.py
 ```
 
+## The hourly test alert
+
+At 5 past every hour the `ids-test-alert` timer sends one ping out of the
+capture card to `IDS_TEST_ALERT_TARGET` (a machine on the capture network
+that is always on, like the router; empty turns the test off). Each engine's
+own rules flag a Linux ping (Snort 1:366 and 1:384, Suricata 1:2100366 and
+1:2100384), so the test passes when both engines' alerts on it are stored
+within 90 seconds: capture, the rules and the collector all work. The
+Overview's strip shows the last test ("Snort ✓ · Suricata ✓"), and its
+headline says "Test alert missed" when an engine's alert didn't come. Each
+test adds about 9 alerts, from this machine to the target. To run one now:
+
+```bash
+.venv/bin/python scripts/send_test_alert.py
+```
+
 The database is written with `synchronous=FULL`, so switching the machine
 off mid-write shouldn't damage it. If it is damaged all the same (the
 dashboard says "the database is damaged", the collector keeps restarting),

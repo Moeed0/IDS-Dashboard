@@ -14,6 +14,7 @@ import {
   machineTime,
   runningNow,
   useNow,
+  type Engine,
   type Fetched,
   type Status,
   type Storage,
@@ -25,6 +26,9 @@ const QUIET_MS = 5 * 60 * 1000;
 // An engine whose newest alert is older than this is shown as quiet (as the
 // Overview's warning says).
 const ENGINE_QUIET_MS = 30 * 60 * 1000;
+// The test alert runs every hour; one older than this says nothing about now
+// (after the machine was off, say), and its dot turns grey.
+const TEST_STALE_MS = 2 * 60 * 60 * 1000;
 
 type Level = "ok" | "warn" | "down" | "unknown";
 
@@ -60,6 +64,14 @@ export function summary(
       detail: saved === null ? "Nothing stored yet" : `Nothing stored for ${duration(machineNow - saved)}`,
     };
   }
+  const missed = testMissed(data, machineNow);
+  if (missed.length) {
+    return {
+      level: "warn",
+      label: "Test alert missed",
+      detail: `No alert from ${missed.map((engine) => NAMES[engine]).join(" or ")} on the last hourly test`,
+    };
+  }
   if (data.storage?.backups?.problem) {
     return { level: "down", label: "Database damaged", detail: data.storage.backups.problem };
   }
@@ -67,6 +79,40 @@ export function summary(
     return { level: "warn", label: "Disk almost full", detail: `${bytes(data.storage.disk_free)} free` };
   }
   return { level: "ok", label: "Live", detail: "" };
+}
+
+/** The engines whose alert didn't come on the last test alert, when that
+ * test is recent: an old one says nothing about now. */
+export function testMissed(data: Status, machineNow: number): Engine[] {
+  const test = data.test_alert;
+  if (!test || machineNow - test.sent_ms > TEST_STALE_MS) return [];
+  return ENGINES.filter((engine) => engine in test.engines && !test.engines[engine]);
+}
+
+/** The strip's test alert cell: when the last test ran and what came. */
+function TestCell({ data, machineNow }: { data: Status | null; machineNow: number }) {
+  const test = data?.test_alert ?? null;
+  const stale = test !== null && machineNow - test.sent_ms > TEST_STALE_MS;
+  const state = !test || stale ? "unknown" : test.ok ? "on" : "off";
+  const engines = test ? ENGINES.filter((engine) => engine in test.engines) : [];
+  const title = !test
+    ? "No test alert yet (IDS_TEST_ALERT_TARGET sets it up)"
+    : `A ping to ${test.target} ${clock(test.sent_ms, machineNow)}: ${
+        stale ? "too long ago to say anything about now" : test.ok ? "every engine alerted" : "an engine didn't alert"
+      }`;
+  return (
+    <Cell
+      name="Test alert"
+      dot={<span className={`dot ${state}`} title={title} />}
+      value={test ? `${duration(machineNow - test.sent_ms)} ago` : data ? "None yet" : "Checking…"}
+      quiet={test !== null && (stale || !test.ok)}
+      detail={
+        test
+          ? engines.map((engine) => `${NAMES[engine]} ${test.engines[engine] ? "✓" : "✗"}`).join(" · ")
+          : "every hour"
+      }
+    />
+  );
 }
 
 /** 19.8 GB, 366 MB */
@@ -173,6 +219,7 @@ export function StatusStrip({ status }: { status: Fetched<Status> }) {
         quiet={saved !== null && machineNow - saved > QUIET_MS}
         detail="last stored alerts"
       />
+      <TestCell data={data ?? null} machineNow={machineNow} />
     </section>
   );
 }

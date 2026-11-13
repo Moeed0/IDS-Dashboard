@@ -75,6 +75,7 @@ from ids.dashboard_data import (
     selection_export,
     status,
 )
+from ids.test_alert import result_path
 from ids.uptime import machine_off_periods
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -321,6 +322,8 @@ def create_app(
         return JSONResponse(status(
             db_path, state_file, ids_sources, alert_retention=alert_retention, engines=engines,
             stats_files=stats_files, archive_dir=archive_dir, backup_dir=backup_dir,
+            # The hourly test alert's result, beside the collector's state.
+            test_alert_file=result_path(state_file) if state_file else None,
         ))
 
     def live_chart(request: Request) -> Response:

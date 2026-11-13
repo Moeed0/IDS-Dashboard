@@ -286,7 +286,7 @@ main {
    as cells of one card, with a thin line between them however they wrap. */
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 1px;
   margin: 14px 0 8px;
   background: var(--border);

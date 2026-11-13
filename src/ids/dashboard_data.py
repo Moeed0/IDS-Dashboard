@@ -41,6 +41,7 @@ from ids.combined_detections import (
 )
 from ids.config import KNOWN_ENGINES
 from ids.ids_config import read_network_variables
+from ids.test_alert import read_result
 from ids.uids import uid_text
 from ids.uptime import off_during
 
@@ -765,6 +766,7 @@ def status(
     stats_files: Mapping[str, Path | str] | None = None,
     archive_dir: Path | str | None = None,
     backup_dir: Path | str | None = None,
+    test_alert_file: Path | str | None = None,
 ) -> dict[str, Any]:
     """Whether the IDS is working now, for the status panel on every
     screen: which of the ``engines`` and the collector run, when the
@@ -772,7 +774,9 @@ def status(
     stores alerts), the latest complete time, for each engine what
     ``_engines`` gives, and from each engine's statistics file in
     ``stats_files`` its packets and drops over the last hour (``capture``;
-    null when the file can't be read), and what ``storage`` says."""
+    null when the file can't be read), what ``storage`` says, and the last
+    hourly test alert's result (``test_alert``, ids.test_alert; null when
+    there is none)."""
     try:
         saved_ms = int(Path(state_file).stat().st_mtime * 1000) if state_file else None
     except OSError:
@@ -795,6 +799,7 @@ def status(
             if engine in engines
         },
         "storage": storage(db_path, archive_dir, backup_dir),
+        "test_alert": read_result(test_alert_file),
     }
 
 

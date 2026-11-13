@@ -283,6 +283,12 @@ is wrong, and nothing while the IDS is live.
              "suricata": {"packets": 4280, "dropped": 0, "minutes": 60}}}
 ```
 
+`test_alert` (not in the example above) is the last hourly test alert
+(`scripts/send_test_alert.py`), or `null`: `{"sent_ms", "source", "target",
+"answered", "wait_seconds", "engines": {engine: {"rule", "time_ms",
+"stored_after_s"} or null}, "ok"}`. The strip shows it; a test that one
+engine missed, under two hours old, makes the headline "Test alert missed".
+
 `storage` (not in the example above) is `{"disk_free", "disk_total",
 "database", "archive", "backups"}` in bytes: the disk the database is on,
 the database with its write-ahead log, the alert archive, and

@@ -1,0 +1,10 @@
+# The test alert every hour at 5 past (ids-test-alert.service). A missed
+# hour isn't made up: the next one comes within the hour.
+[Unit]
+Description=Hourly IDS test alert
+
+[Timer]
+OnCalendar=*-*-* *:05:00
+
+[Install]
+WantedBy=timers.target
