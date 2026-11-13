@@ -145,13 +145,14 @@ def insert_alert_batch(
             severity,
             rule_key,
             correlation_group_id,
-            event_hash
+            event_hash,
+            app
         )
         VALUES (
             ?,?,?,?,?,?,?,?,?,?,
             ?,?,?,?,?,?,?,?,?,?,
             ?,?,?,?,?,?,?,?,?,?,
-            ?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?
         )
         ON CONFLICT(event_hash) DO NOTHING
     """
@@ -200,6 +201,7 @@ def insert_alert_batch(
                 row.get("rule_key"),
                 None,
                 row.get("event_hash"),
+                row.get("app"),
             )
         )
 

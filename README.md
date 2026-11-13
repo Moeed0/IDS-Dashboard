@@ -90,7 +90,7 @@ network interface (afpacket)
   a 7-character UID from its minute and its number in that minute, and a
   packet is named by its first alert's), newest first, with filters for the
   time (the last 5 minutes to 30 days), engine, severity, protocol, class,
-  service, rule, addresses and port, and "Show the newest" 5, 10, 20 or any
+  service, app (as Snort's OpenAppID names it), rule, addresses and port, and "Show the newest" 5, 10, 20 or any
   number. A click on an alert shows all of it: its rule's text, why it
   fired, and the other alerts on its packet. What the filters choose can be
   downloaded as combined JSON

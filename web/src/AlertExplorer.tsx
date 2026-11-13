@@ -186,6 +186,7 @@ export function AlertExplorer({
     filters.protocol,
     filters.alertClass,
     filters.service,
+    filters.app,
     filters.rule.trim(),
     filters.source.trim(),
     filters.destination.trim(),
@@ -317,6 +318,7 @@ export function AlertExplorer({
             onChange={(alertClass) => change({ alertClass })}
           />
           <Choice label="Service" value={filters.service} values={values?.services} onChange={(service) => change({ service })} />
+          <Choice label="App" value={filters.app} values={values?.apps} onChange={(app) => change({ app })} />
           <label>
             Rule
             <input

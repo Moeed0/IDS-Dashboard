@@ -30,7 +30,7 @@ def _database(path, rows):
         "event_ts_utc INTEGER, gid INTEGER, sid INTEGER, rev INTEGER, msg TEXT, "
         "classification TEXT, severity INTEGER, priority INTEGER, protocol TEXT, "
         "service TEXT, src_addr TEXT, src_port INTEGER, dst_addr TEXT, "
-        "dst_port INTEGER, rule_key TEXT, raw_json TEXT, uid INTEGER)"
+        "dst_port INTEGER, rule_key TEXT, raw_json TEXT, uid INTEGER, app TEXT)"
     )
     connection.executemany(
         "INSERT INTO alerts (engine, event_ts_utc, gid, sid, msg, severity, raw_json) "
@@ -63,7 +63,7 @@ def _app(db_path, web_dist=None):
     )
 
 
-def _get(app, path, token=TOKEN, method="GET", **query):
+def _get(app, path, /, token=TOKEN, method="GET", **query):
     """One request (GET unless ``method`` says) through the ASGI app:
     status, headers and body."""
     headers = [(b"host", b"testserver")]
@@ -447,12 +447,14 @@ def test_the_alert_list_takes_every_filter(db_path):
     assert rules(rule="116:444") == ["116:444"]
     assert rules(severity="3,4") == ["2200007", "116:444", "2001119"]
     assert rules(severity="1") == []
+    # No stored alert has an app here; the filter is taken.
+    assert rules(app="IGMP") == []
     assert rules(last="2") == ["2200007", "116:444"]
     assert rules(until_ms=str(_ms(2026, 11, 3, 12, 39))) == ["2001119"]
     page = json.loads(_get(app, "/alerts", last="2", page_size="1")[2])
     assert (page["total"], page["matching"], page["pages"]) == (2, 3, 2)
     status, _, body = _get(app, "/alerts/values")
-    assert (status, json.loads(body)) == (200, {"protocols": [], "classes": [], "services": []})
+    assert (status, json.loads(body)) == (200, {"protocols": [], "classes": [], "services": [], "apps": []})
     # One alert, for the side panel.
     status, _, body = _get(app, "/alerts/2")
     detail = json.loads(body)

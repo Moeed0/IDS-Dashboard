@@ -10,6 +10,10 @@
 #   /var/log/suricata (pcap-log, conditional: alerts): 10 files of 100 MiB at
 #   most, the oldest going first.
 # - The Conficker P2P rules are off (deploy/suricata/disable.conf).
+# - Two capture threads on the capture card, not one per CPU ("auto": 8).
+#   Each thread keeps its own copy of the rules' match state, and this lab's
+#   traffic is a few packets a second: more threads only cost memory, which
+#   on this VM pushes it into swap on a slow disk. Same rules, same alerts.
 # - Its logs are no longer open to every user: root writes them, and only
 #   this folder's owner (the collector and the dashboard) may read them too.
 #
@@ -75,6 +79,21 @@ for index in range(start + 1, end):
         lines[index] = f"{match.group(1)}{match.group(2)}: {wanted.pop(match.group(2))}\n"
 if wanted:
     sys.exit(f"!! pcap-log has no {', '.join(wanted)} line in {path}")
+
+# The capture card's entry: the first "- interface:" under af-packet.
+section = next(i for i, line in enumerate(lines) if re.match(r"^af-packet:", line))
+card = next(i for i in range(section + 1, len(lines)) if re.match(r"^\s*- interface:", lines[i]))
+card_indent = len(lines[card]) - len(lines[card].lstrip())
+for index in range(card + 1, len(lines)):
+    line = lines[index]
+    if line.strip() and not line.lstrip().startswith("#") \
+            and len(line) - len(line.lstrip()) <= card_indent:
+        sys.exit(f"!! no threads line under {lines[card].strip()} in {path}")
+    match = re.match(r"^(\s*)#?\s*threads:\s*\S+", line)
+    if match:
+        lines[index] = f"{match.group(1)}threads: 2\n"
+        break
+
 path.write_text("".join(lines))
 PYTHON
 

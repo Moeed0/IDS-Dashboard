@@ -13,6 +13,8 @@ export interface Filters {
   severities: number[];
   protocol: string;
   service: string;
+  /** The application OpenAppID named (Snort's alerts only). */
+  app: string;
   alertClass: string;
   rule: string;
   source: string;
@@ -30,6 +32,7 @@ export const OPEN: Filters = {
   severities: [],
   protocol: "",
   service: "",
+  app: "",
   alertClass: "",
   rule: "",
   source: "",
@@ -48,6 +51,7 @@ export function filterParams(filters: Filters): Params {
     protocol: filters.protocol,
     class: filters.alertClass,
     service: filters.service,
+    app: filters.app,
     rule: filters.rule.trim(),
     source: filters.source.trim(),
     destination: filters.destination.trim(),
@@ -66,6 +70,7 @@ export function narrowing(filters: Filters): number {
     filters.severities.length,
     filters.protocol,
     filters.service,
+    filters.app,
     filters.alertClass,
     filters.rule.trim(),
     filters.source.trim(),

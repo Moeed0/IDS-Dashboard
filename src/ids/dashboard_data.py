@@ -350,8 +350,8 @@ def _top_rules(
 
 
 # What the alert search looks in: the message, the rule as the screens show
-# it (gid:sid:rev), the class, the protocol, the service, both endpoints and
-# the PKT time.
+# it (gid:sid:rev), the class, the protocol, the service, the app, both
+# endpoints and the PKT time.
 _SEARCHED = " || ' ' || ".join(
     f"COALESCE({expression}, '')"
     for expression in (
@@ -360,6 +360,7 @@ _SEARCHED = " || ' ' || ".join(
         "classification",
         "protocol",
         "service",
+        "app",
         "src_addr || ':' || src_port",
         "dst_addr || ':' || dst_port",
         "strftime('%Y-%m-%d %H:%M:%S', event_ts_utc / 1000, 'unixepoch', '+5 hours')",
@@ -382,7 +383,8 @@ class AlertFilter:
 
     ``engine`` takes one engine's alerts; ``since_ms`` and ``until_ms`` a
     time range; ``search`` what the search box finds; ``severities`` (1 to
-    4) any of those; ``protocol``, ``classification`` and ``service`` that
+    4) any of those; ``protocol``, ``classification``, ``service`` and
+    ``app`` (the application OpenAppID named, Snort's alerts only) that
     value, in any case; ``rule`` (gid, sid, rev; None for any) that rule;
     ``source`` and ``destination`` an address or network (parse_network);
     ``port`` that port on either side; ``label`` "attack" the alerts from or
@@ -398,6 +400,7 @@ class AlertFilter:
     protocol: str = ""
     classification: str = ""
     service: str = ""
+    app: str = ""
     rule: tuple[int | None, int | None, int | None] | None = None
     source: str = ""
     destination: str = ""
@@ -494,6 +497,7 @@ def _filter_sql(chosen: AlertFilter, engines: Sequence[str]) -> tuple[str, dict[
         ("protocol", chosen.protocol),
         ("classification", chosen.classification),
         ("service", chosen.service),
+        ("app", chosen.app),
     ):
         if value.strip():
             conditions.append(f"lower({column}) = :{column}")
@@ -627,7 +631,7 @@ def alerts(
 _LISTED = (
     "id, engine, event_ts_utc, gid, sid, rev, msg, classification, "
     "COALESCE(severity, priority), protocol, service, "
-    "src_addr, src_port, dst_addr, dst_port, uid"
+    "src_addr, src_port, dst_addr, dst_port, uid, app"
 )
 
 
@@ -636,7 +640,7 @@ def _listed(row: Sequence[Any], packet_uid: Any, both: bool) -> dict[str, Any]:
     packet's UID and whether both engines alerted on that packet."""
     (
         record_id, engine, event_ts_utc, gid, sid, rev, message, classification,
-        severity, protocol, service, src_addr, src_port, dst_addr, dst_port, uid,
+        severity, protocol, service, src_addr, src_port, dst_addr, dst_port, uid, app,
     ) = row
     return {
         "id": record_id,
@@ -652,6 +656,8 @@ def _listed(row: Sequence[Any], packet_uid: Any, both: bool) -> dict[str, Any]:
         "severity": max(1, min(4, int(severity))) if severity is not None else 4,
         "protocol": protocol,
         "service": _known(service),
+        # The application OpenAppID named (Snort's alerts); None when none.
+        "app": _known(app),
         "src": _endpoint(src_addr, src_port),
         "dst": _endpoint(dst_addr, dst_port),
         "uid": uid_text(uid),
@@ -997,21 +1003,25 @@ def combined_export(
 
 
 def filter_values(db_path: Path | str, *, engines: Sequence[str] = ENGINES) -> dict[str, list[str]]:
-    """The protocols, classes and services the stored alerts of the
+    """The protocols, classes, services and apps the stored alerts of the
     ``engines`` have, the most common first: the Alert Explorer's filter
     choices."""
     with closing(_connect(db_path)) as connection:
         rows = connection.execute(
             f"""
-            SELECT protocol, classification, service, COUNT(*) FROM alerts
+            SELECT protocol, classification, service, app, COUNT(*) FROM alerts
             WHERE engine IN ({", ".join("?" for _ in engines)})
-            GROUP BY protocol, classification, service
+            GROUP BY protocol, classification, service, app
             """,
             tuple(engines),
         ).fetchall()
-    found: dict[str, Counter[str]] = {"protocols": Counter(), "classes": Counter(), "services": Counter()}
-    for protocol, classification, service, number in rows:
-        for key, value in (("protocols", protocol), ("classes", classification), ("services", service)):
+    found: dict[str, Counter[str]] = {
+        "protocols": Counter(), "classes": Counter(), "services": Counter(), "apps": Counter(),
+    }
+    for protocol, classification, service, app, number in rows:
+        for key, value in (
+            ("protocols", protocol), ("classes", classification), ("services", service), ("apps", app),
+        ):
             if _known(value) is not None:
                 found[key][str(value)] += number
     return {key: [value for value, _ in values.most_common()] for key, values in found.items()}

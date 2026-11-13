@@ -111,7 +111,7 @@ Until 5 November 2026 the rule counts and the engines' files were in
 | `GET /status` | `status(db_path, state_file)` | Whether the IDS stores alerts now, for the status panel |
 | `GET /live` | `live(db_path)` | The Overview's live chart: the last 15 minutes in 30-second steps |
 | `GET /alerts?<filters>&page=&page_size=` | `alerts(db_path, filters=AlertFilter(…), …)` | One page of alerts, newest first |
-| `GET /alerts/values` | `filter_values(db_path)` | The protocols, classes and services the filters offer |
+| `GET /alerts/values` | `filter_values(db_path)` | The protocols, classes, services and apps the filters offer |
 | `GET /alerts/{id}` | `alert_detail(db_path, id)` | One alert, whole, for the side panel |
 | `GET /rule-pairs` | `rule_pairs(db_path)` | The last hour's rules both engines fired on one packet, for the Alert Explorer |
 | `GET /export/selection?<filters>` | `selection(db_path, AlertFilter(…))` | What a download or send of the filtered alerts would hold |
@@ -344,7 +344,7 @@ When the IDS machine or its API stops answering:
     {"id": 229839, "engine": "snort", "time_ms": 1793694999066, "rule": "112:1",
      "gid": 112, "sid": 1, "rev": 1,
      "message": "(arp_spoof) unicast ARP request", "class": null, "severity": 3,
-     "protocol": "ARP", "service": null, "src": null, "dst": null, "both": false}
+     "protocol": "ARP", "service": null, "app": null, "src": null, "dst": null, "both": false}
   ]
 }
 ```
@@ -360,11 +360,12 @@ each one left out takes every alert:
   `since_ms` (epoch ms) can be sent instead, and `until_ms` ends the range.
 - `search` matches the message, the rule as the screens show it
   (`116:444:1`), the class, protocol,
-  service, either endpoint (`192.168.50.1:53`) or the PKT time
+  service, app, either endpoint (`192.168.50.1:53`) or the PKT time
   (`2026-11-03 12:40`), in any case.
 - `severity` is one or more of 1 to 4 (`1,2`); `protocol` (`UDP`), `class`
-  (`Potentially Bad Traffic`) and `service` (`dns`) take that value in any
-  case, from the lists `GET /alerts/values` gives (the most common first;
+  (`Potentially Bad Traffic`), `service` (`dns`) and `app` (`IGMP`: the
+  application Snort's OpenAppID named; Suricata's alerts have none) take that
+  value in any case, from the lists `GET /alerts/values` gives (the most common first;
   "none" and "unknown" are left out).
 - `rule` is a SID (`2001119`), `gid:sid` (`116:444`) or `gid:sid:rev`.
 - `label` is `attack` for the alerts from or to a lab attacker (an
@@ -430,7 +431,7 @@ each one left out takes every alert:
   attack" tag before the message), severity as four buttons of circles, "More filters" (with how many
   of its filters are set) and "Clear" while any filter is set, and the
   "Side by side" / "Combined" buttons at its end. "More filters" opens a row
-  of the others: protocol, class, service, rule, source, destination, port
+  of the others: protocol, class, service, app, rule, source, destination, port
   (the list boxes keep one width, a long class ending in "…"). A filter
   that is set is outlined. The second: "Show the newest" 5, 10 or 20, or
   any number typed in (none chosen shows every alert, and a chosen number
@@ -461,7 +462,7 @@ A row clicked (or Enter on it) opens a panel down the right side:
   for that one packet (docs/combined-json-format.md), each left out when
   empty.
 - The panel shows the whole message, time, engine, rule (with a link that
-  puts it in the Rule filter), class, protocol and service, both endpoints,
+  puts it in the Rule filter), class, protocol and service, the app, both endpoints,
   the alert's and the packet's IDs; the other alerts on the packet, each a
   link that opens it; the alert's rule (why it fired, its text, and the rest
   under its own headings); the CVEs and techniques; and the packet's entry

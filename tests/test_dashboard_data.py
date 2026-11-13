@@ -39,18 +39,18 @@ def _database(path, alerts):
         "event_ts_utc INTEGER, gid INTEGER, sid INTEGER, rev INTEGER, msg TEXT, "
         "classification TEXT, severity INTEGER, priority INTEGER, protocol TEXT, "
         "service TEXT, src_addr TEXT, src_port INTEGER, dst_addr TEXT, "
-        "dst_port INTEGER, rule_key TEXT, raw_json TEXT, uid INTEGER)"
+        "dst_port INTEGER, rule_key TEXT, raw_json TEXT, uid INTEGER, app TEXT)"
     )
     connection.executemany(
         "INSERT INTO alerts (engine, event_ts_utc, gid, sid, rev, msg, classification, "
-        "severity, protocol, service, src_addr, src_port, dst_addr, dst_port, raw_json) "
+        "severity, protocol, service, src_addr, src_port, dst_addr, dst_port, raw_json, app) "
         "VALUES (:engine, :time, :gid, :sid, :rev, :msg, :class, :severity, :protocol, "
-        ":service, :src_addr, :src_port, :dst_addr, :dst_port, :raw_json)",
+        ":service, :src_addr, :src_port, :dst_addr, :dst_port, :raw_json, :app)",
         [
             {
                 "rev": 1, "class": None, "severity": 3, "protocol": None, "service": None,
                 "src_addr": None, "src_port": None, "dst_addr": None, "dst_port": None,
-                "raw_json": "{}",
+                "raw_json": "{}", "app": None,
                 **alert,
             }
             for alert in alerts
@@ -273,7 +273,7 @@ def _alert_list_database(tmp_path):
             ),
             _alert(
                 "snort", _ms(2026, 11, 3, 12, 39, 49), *IPV4_OPTION,
-                **{"class": "none", "protocol": "IP", "service": "unknown",
+                **{"class": "none", "protocol": "IP", "service": "unknown", "app": "IGMP",
                    "src_addr": "192.168.50.122", "dst_addr": "224.0.0.2"},
             ),
             _alert(
@@ -313,6 +313,8 @@ def test_alert_list_pages_newest_first(tmp_path):
         "severity": 1,
         "protocol": "UDP",
         "service": None,
+        # Suricata names no app.
+        "app": None,
         # IPv6 in its short form, with brackets before the port.
         "src": "[fe80::2d37:6cf4:f5c8:64f7]:5353",
         "dst": "[ff02::fb]:5353",
@@ -326,6 +328,20 @@ def test_alert_list_pages_newest_first(tmp_path):
     }
     # "none" and "unknown" say nothing; an address without a port is alone.
     assert (snort["class"], snort["service"], snort["src"]) == (None, None, "192.168.50.122")
+    # The application OpenAppID named for Snort's alert.
+    assert snort["app"] == "IGMP"
+
+
+def test_alert_list_filters_and_searches_by_app(tmp_path):
+    db_path = _alert_list_database(tmp_path)
+
+    def rules(**chosen):
+        return [row["rule"] for row in alerts(db_path, filters=AlertFilter(**chosen))["rows"]]
+
+    # In any case; only Snort's alerts have an app.
+    assert rules(app="igmp") == ["116:444"]
+    assert rules(app="HTTP") == []
+    assert rules(search="igmp") == ["116:444"]
 
 
 def test_alert_list_filters_by_engine_time_and_search(tmp_path):
@@ -439,6 +455,7 @@ def test_the_filters_offer_the_stored_protocols_classes_and_services(tmp_path):
     # The most common first; "none" and "unknown" say nothing.
     assert filter_values(db_path) == {
         "protocols": ["UDP", "IP"], "classes": ["Not Suspicious Traffic"], "services": ["dns"],
+        "apps": ["IGMP"],
     }
 
 

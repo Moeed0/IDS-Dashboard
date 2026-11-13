@@ -166,6 +166,9 @@ export interface AlertRow {
   severity: number;
   protocol: string | null;
   service: string | null;
+  /** The application OpenAppID named for the flow (Snort's alerts); null
+   * when none. */
+  app?: string | null;
   src: string | null;
   dst: string | null;
   /** Its UID: 7 characters from its minute and its number in that minute,
@@ -216,11 +219,13 @@ export interface SelectionInfo {
   max_alerts: number;
 }
 
-/** The protocols, classes and services the stored alerts have (/alerts/values). */
+/** The protocols, classes, services and apps the stored alerts have
+ * (/alerts/values). */
 export interface FilterValues {
   protocols: string[];
   classes: string[];
   services: string[];
+  apps?: string[];
 }
 
 /** What Send says once the LLM PC has taken the file. */

@@ -89,6 +89,8 @@ def normalize_snort(alert: dict[str, Any]) -> dict[str, Any]:
         "snort_rule": alert.get("rule"),
         "iface": alert.get("iface"),
         "service": alert.get("service"),
+        # The application OpenAppID named for the flow ("" when none).
+        "app": str(alert.get("app_id") or "").strip() or None,
         "src_addr": src_addr,
         "src_port": src_port,
         "dst_addr": dst_addr,

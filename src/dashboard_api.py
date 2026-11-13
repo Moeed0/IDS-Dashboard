@@ -206,6 +206,7 @@ def _alert_filter(request: Request, engines: Sequence[str]) -> AlertFilter:
         protocol=params.get("protocol", "")[:40],
         classification=params.get("class", "")[:200],
         service=params.get("service", "")[:40],
+        app=params.get("app", "")[:80],
         rule=rule,
         source=source,
         destination=destination,
@@ -362,7 +363,7 @@ def create_app(
     values_cache: dict[str, Any] = {}
 
     def alert_values(request: Request) -> Response:
-        """The protocols, classes and services the filters offer."""
+        """The protocols, classes, services and apps the filters offer."""
         if time.monotonic() - values_cache.get("read", -FILTER_VALUES_SECONDS) >= FILTER_VALUES_SECONDS:
             values_cache.update(values=filter_values(db_path, engines=engines), read=time.monotonic())
         return JSONResponse(values_cache["values"])

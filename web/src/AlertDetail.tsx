@@ -115,6 +115,11 @@ export function AlertDetail({
             </Fact>
             {alert.class && <Fact name="Class">{alert.class}</Fact>}
             {alert.protocol && <Fact name="Protocol">{[alert.protocol, alert.service].filter(Boolean).join(" · ")}</Fact>}
+            {alert.app && (
+              <Fact name="App">
+                {alert.app} <span className="muted">as OpenAppID named it</span>
+              </Fact>
+            )}
             {alert.src && <Fact name="Source">{alert.src}</Fact>}
             {alert.dst && <Fact name="Destination">{alert.dst}</Fact>}
             <Fact name="Alert ID">{alert.uid}</Fact>

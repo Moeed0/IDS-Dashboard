@@ -52,6 +52,9 @@ ALERT_PHASE1_COLUMNS = {
     "event_hash": "TEXT",
     # The alert's 6-character UID, as its number (ids/uids.py).
     "uid": "INTEGER",
+    # The application OpenAppID named for the flow (Snort's app_id, like
+    # "HTTP" or "IGMP"); Suricata has no such field: NULL.
+    "app": "TEXT",
 }
 
 
@@ -161,7 +164,8 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             rule_key TEXT,
             correlation_group_id TEXT,
             event_hash TEXT,
-            uid INTEGER
+            uid INTEGER,
+            app TEXT
         )
         """
     )
@@ -289,12 +293,27 @@ FILTER_INDEXES = {
     "idx_alerts_protocol": "lower(protocol), engine, event_ts_utc",
     "idx_alerts_class": "lower(classification), engine, event_ts_utc",
     "idx_alerts_service": "lower(service), engine, event_ts_utc",
+    "idx_alerts_app": "lower(app), engine, event_ts_utc",
     "idx_alerts_sid": "sid, gid, rev, engine, event_ts_utc",
     "idx_alerts_src_addr": "src_addr, engine, event_ts_utc",
     "idx_alerts_dst_addr": "dst_addr, engine, event_ts_utc",
     "idx_alerts_src_port": "src_port, engine, event_ts_utc",
     "idx_alerts_dst_port": "dst_port, engine, event_ts_utc",
 }
+
+
+def _fill_app(conn: sqlite3.Connection) -> None:
+    """The app column of the alerts stored before it, once, when it is
+    added: from the app_id Snort wrote in each alert (kept in raw_json)."""
+    conn.execute(
+        """
+        UPDATE alerts
+        SET app = NULLIF(TRIM(json_extract(raw_json, '$.app_id')), '')
+        WHERE engine = 'snort'
+            AND raw_json LIKE '%"app_id"%'
+            AND json_valid(raw_json)
+        """
+    )
 
 
 def _create_filter_indexes(conn: sqlite3.Connection) -> None:
@@ -306,6 +325,7 @@ def ensure_schema(conn: sqlite3.Connection, uid_mark: Path | None = None) -> Non
     """Creates or updates the tables and indexes, and gives the alerts
     stored before UIDs theirs (ids/uids.py, ``uid_mark`` its mark file)."""
     _create_tables(conn)
+    had_app = "app" in _table_columns(conn, "alerts")
 
     _add_missing_columns(
         conn,
@@ -318,6 +338,9 @@ def ensure_schema(conn: sqlite3.Connection, uid_mark: Path | None = None) -> Non
         "alerts",
         ALERT_PHASE1_COLUMNS,
     )
+
+    if not had_app:
+        _fill_app(conn)
 
     _add_missing_columns(
         conn,
