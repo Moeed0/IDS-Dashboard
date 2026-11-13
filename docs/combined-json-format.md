@@ -281,6 +281,14 @@ and line breaks kept, any other byte a dot). Suricata's Base64 `payload` and
 `packet` are left out, as is Snort's `b64_data` itself: so Snort's record
 rebuilds with `payload_printable` in place of `b64_data`.
 
+Also kept: Snort's `app_id`, the application its OpenAppID detectors named
+for the flow (`"IGMP"`, `"ICMP for IPv6"`, `"UPnP"`, `"NetBIOS-ns"` ...; on
+since 12 November 2026, so older alerts have none). Like any field of
+Snort's own output it is written once: in the rule's `ids_output` when all
+the rule's alerts in the file share it, otherwise on each packet. Suricata
+has no such field (its `app_proto`, the protocol it parsed, is the nearest).
+The dashboard calls it "App" and filters by it.
+
 ## What can still look repeated
 
 - Values of different packets that happen to be equal, such as a packet count
