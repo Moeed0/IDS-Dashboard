@@ -129,7 +129,8 @@ def _known(value: Any) -> Any:
 
 def _lab_attacker_ips() -> set[str]:
     """The lab attackers' addresses (config/lab_phases.json), read again
-    only when the file changes: every alert row is checked against them."""
+    only when the file changes: the status says when one is outside
+    HOME_NET."""
     try:
         changed = LAB_PHASES_FILE.stat().st_mtime_ns
     except OSError:
@@ -388,9 +389,7 @@ class AlertFilter:
     ``app`` (the application OpenAppID named, Snort's alerts only) that
     value, in any case; ``rule`` (gid, sid, rev; None for any) that rule;
     ``source`` and ``destination`` an address or network (parse_network);
-    ``port`` that port on either side; ``label`` "attack" the alerts from or
-    to a lab attacker (config/lab_phases.json), "background" the others.
-    ``last`` takes only the newest that many of them, and with ``each`` that
+    ``port`` that port on either side. ``last`` takes only the newest that many of them, and with ``each`` that
     many of each engine (a download of the side-by-side lists)."""
 
     engine: str | None = None
@@ -406,7 +405,6 @@ class AlertFilter:
     source: str = ""
     destination: str = ""
     port: int | None = None
-    label: str = ""
     last: int | None = None
     each: bool = False
 
@@ -514,30 +512,7 @@ def _filter_sql(chosen: AlertFilter, engines: Sequence[str]) -> tuple[str, dict[
     if chosen.port is not None:
         conditions.append("(src_port = :port OR dst_port = :port)")
         parameters["port"] = int(chosen.port)
-    if chosen.label:
-        # Stored as the engine wrote it: IPv6 may be written out in full.
-        spellings = sorted(
-            {spelling for address in _lab_attacker_ips() for spelling in _spellings(address)}
-        )
-        names = {f"attacker{index}": spelling for index, spelling in enumerate(spellings)}
-        listed = ", ".join(f":{name}" for name in names)
-        attack = f"(src_addr IN ({listed}) OR dst_addr IN ({listed}))" if names else "0"
-        conditions.append(attack if chosen.label == "attack" else f"NOT COALESCE({attack}, 0)")
-        parameters.update(names)
     return (f"WHERE {' AND '.join(conditions)}" if conditions else ""), parameters
-
-
-def _spellings(address: str) -> set[str]:
-    """The ways the engines write an address: as given, short, and IPv6 in full."""
-    found = {address}
-    try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError:
-        return found
-    found.add(str(parsed))
-    if parsed.version == 6:
-        found.add(parsed.exploded)
-    return found
 
 
 def alerts(
@@ -664,23 +639,7 @@ def _listed(row: Sequence[Any], packet_uid: Any, both: bool) -> dict[str, Any]:
         "uid": uid_text(uid),
         "packet": uid_text(packet_uid),
         "both": both,
-        # From or to a lab attacker (config/lab_phases.json), or not.
-        "label": "attack" if {_address_text(src_addr), _address_text(dst_addr)} & _attackers() else "background",
     }
-
-
-def _address_text(address: Any) -> str | None:
-    """One spelling per address (IPv6 short), to compare."""
-    if not address:
-        return None
-    try:
-        return str(ipaddress.ip_address(str(address)))
-    except ValueError:
-        return str(address)
-
-
-def _attackers() -> set[str]:
-    return {spelling for spelling in map(_address_text, _lab_attacker_ips()) if spelling}
 
 
 def rule_pairs(db_path: Path | str, *, engines: Sequence[str] = ENGINES) -> dict[str, Any]:
@@ -993,7 +952,6 @@ def combined_export(
         window_end=end,
         length_label=length_label,
         rule_intelligence=rule_intelligence,
-        lab_attackers=_lab_attacker_ips(),
     )
     packets = document.get("packets", [])
     return {
@@ -1178,7 +1136,6 @@ def selection_export(
         window_end=end,
         length_label=label,
         rule_intelligence=rule_intelligence,
-        lab_attackers=_lab_attacker_ips(),
         trim_to_window=False,
     )
     taken = [chosen.engine] if chosen.engine else list(engines)
@@ -1255,7 +1212,6 @@ def alert_detail(
         window_start=moment,
         window_end=moment,
         rule_intelligence=rule_intelligence,
-        lab_attackers=_lab_attacker_ips(),
         trim_to_window=False,
     )
     return {

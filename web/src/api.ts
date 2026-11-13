@@ -193,8 +193,6 @@ export interface AlertRow {
   packet?: string;
   /** Both engines alerted on its packet. */
   both: boolean;
-  /** From or to a lab attacker (config/lab_phases.json), or not. */
-  label?: "attack" | "background";
 }
 
 /** One alert, whole (/alerts/{id}): as the lists show it, the other alerts

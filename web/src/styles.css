@@ -965,23 +965,6 @@ td.bar.suricata {
   overflow-wrap: anywhere;
 }
 
-/* A lab attack's alerts: a small tag before the message. */
-.tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.6;
-  vertical-align: 1px;
-}
-
-.tag.attack {
-  color: var(--severe);
-  background: color-mix(in srgb, var(--severe) 14%, transparent);
-}
-
 /* A section that shows only its heading until it is opened. */
 .fold-head {
   display: flex;

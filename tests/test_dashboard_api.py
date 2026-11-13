@@ -222,7 +222,6 @@ def test_alert_list_parameters_are_checked(db_path):
     )
     assert error(last="0") == "last must be from 1 to 150000"
     assert error(port="70000") == "port must be from 0 to 65535"
-    assert error(label="attacks") == "label must be attack or background"
     assert error(range="All stored", since_ms="1") == "give range or since_ms, not both"
     rows = json.loads(_get(app, "/alerts", range="All stored", search="padding")[2])["rows"]
     assert [row["rule"] for row in rows] == ["2200007"]

@@ -95,13 +95,6 @@ const MESSAGE: Column = {
   value: (row) => row.message,
   className: "message",
   tip: (row) => row.message,
-  // A lab attack's alerts say so before their message.
-  render: (row) => (
-    <>
-      {row.label === "attack" && <span className="tag attack">Lab attack</span>}
-      {row.message}
-    </>
-  ),
 };
 const PANEL_COLUMNS = [TIME, PACKET, BOTH, RULE, SEVERITY, MESSAGE];
 const TABLE_COLUMNS: Column[] = [
@@ -256,16 +249,6 @@ export function AlertExplorer({
             ))}
           </select>
         )}
-        <select
-          aria-label="Lab attack or background"
-          className={filters.label ? "set" : undefined}
-          value={filters.label}
-          onChange={(event) => change({ label: event.target.value as typeof filters.label })}
-        >
-          <option value="">All traffic</option>
-          <option value="attack">Lab attacks</option>
-          <option value="background">Background</option>
-        </select>
         <div className="chips" role="group" aria-label="Severity">
           {[1, 2, 3, 4].map((level) => {
             const on = filters.severities.includes(level);

@@ -374,9 +374,6 @@ each one left out takes every alert:
   value in any case, from the lists `GET /alerts/values` gives (the most common first;
   "none" and "unknown" are left out).
 - `rule` is a SID (`2001119`), `gid:sid` (`116:444`) or `gid:sid:rev`.
-- `label` is `attack` for the alerts from or to a lab attacker (an
-  `attacker_ip` of `config/lab_phases.json`) and `background` for the others;
-  each row gives its own `label` too.
 - `source` and `destination` are an address (`192.168.50.122`, `fe80::1`), a
   network (`192.168.50.0/24`) or an IPv4 address's first parts with a dot
   (`192.168.50.`, the same /24); `port` is a port on either side.
@@ -433,8 +430,7 @@ each one left out takes every alert:
   `search`, and 25 rows a page): every stored alert, newest first, unless
   the filters or "Show the newest" narrow it. Two toolbars stand over the
   lists. The first: time (Any time, or the last 5 minutes to 30 days),
-  engine, lab attacks or background (a lab attack's rows have a red "Lab
-  attack" tag before the message), severity as four buttons of circles, "More filters" (with how many
+  engine, severity as four buttons of circles, "More filters" (with how many
   of its filters are set) and "Clear" while any filter is set, and the
   "Side by side" / "Combined" buttons at its end. "More filters" opens a row
   of the others: protocol, class, service, app, rule, source, destination, port

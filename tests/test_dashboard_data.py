@@ -324,7 +324,6 @@ def test_alert_list_pages_newest_first(tmp_path):
         "uid": "01M6000",
         "packet": "01M6000",
         "both": False,
-        "label": "background",
     }
     # "none" and "unknown" say nothing; an address without a port is alone.
     assert (snort["class"], snort["service"], snort["src"]) == (None, None, "192.168.50.122")
@@ -392,33 +391,21 @@ def test_alert_list_filters_by_severity_protocol_class_service_rule_addresses_an
     assert rules(engine="suricata", severities=(3,)) == ["2001119"]
 
 
-def test_alerts_from_or_to_a_lab_attacker_are_labelled_and_filtered(tmp_path, monkeypatch):
+def test_alerts_and_packets_carry_no_label_even_with_a_lab_attacker(tmp_path, monkeypatch):
     import ids.dashboard_data as dashboard_data
 
+    # The labels "lab attack" and "background" were removed (13 Nov 2026):
+    # a known lab attacker changes nothing in the rows or the file.
     phases = tmp_path / "lab_phases.json"
     phases.write_text(json.dumps({"1": {"attacker_ip": "192.168.50.122"}}))
     monkeypatch.setattr(dashboard_data, "LAB_PHASES_FILE", phases)
     db_path = _alert_list_database(tmp_path)
 
-    labels = {row["rule"]: row["label"] for row in alerts(db_path)["rows"]}
-    # Snort's alert from 192.168.50.122, and Suricata's DNS answer to it.
-    assert labels == {"116:444": "attack", "2001119": "attack", "2030387": "background"}
-    assert [row["rule"] for row in alerts(db_path, filters=AlertFilter(label="attack"))["rows"]] == [
-        "116:444", "2001119",
-    ]
-    assert [row["rule"] for row in alerts(db_path, filters=AlertFilter(label="background"))["rows"]] == [
-        "2030387",
-    ]
-    # Every packet of the file says so, from the engines' own addresses: the
-    # DNS answer to 192.168.50.122, and the ARP check without any.
+    assert all("label" not in row for row in alerts(db_path)["rows"])
     packet_db = tmp_path / "packets.db"
     _database(packet_db, _one_packet_alerts())
     built = selection_export(packet_db, AlertFilter(engine="snort"), rule_intelligence=None)
-    assert [packet["label"] for packet in json.loads(built["json"])["packets"]] == ["lab attack", "background"]
-    # No attackers known: nothing is a lab attack.
-    phases.write_text("{}")
-    assert alerts(db_path, filters=AlertFilter(label="attack"))["total"] == 0
-    assert alerts(db_path, filters=AlertFilter(label="background"))["total"] == 3
+    assert all("label" not in packet for packet in json.loads(built["json"])["packets"])
 
 
 def test_last_n_takes_the_newest_and_its_pages_stop_there(tmp_path):

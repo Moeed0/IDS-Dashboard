@@ -7,8 +7,6 @@ export interface Filters {
   range: string;
   /** One engine's alerts; "" for every engine's. */
   engine: Engine | "";
-  /** From or to a lab attacker ("attack"), or not ("background"); "" for both. */
-  label: "" | "attack" | "background";
   /** 1 (the most severe) to 4; none for every severity. */
   severities: number[];
   protocol: string;
@@ -28,7 +26,6 @@ export interface Filters {
 export const OPEN: Filters = {
   range: "",
   engine: "",
-  label: "",
   severities: [],
   protocol: "",
   service: "",
@@ -46,7 +43,6 @@ export function filterParams(filters: Filters): Params {
   const params: Params = {
     range: filters.range,
     engine: filters.engine,
-    label: filters.label,
     severity: [...filters.severities].sort().join(","),
     protocol: filters.protocol,
     class: filters.alertClass,
@@ -66,7 +62,6 @@ export function narrowing(filters: Filters): number {
   return [
     filters.range,
     filters.engine,
-    filters.label,
     filters.severities.length,
     filters.protocol,
     filters.service,

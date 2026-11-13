@@ -11,7 +11,6 @@ describe("filterParams", () => {
     const params = filterParams({
       range: "Last 15 minutes",
       engine: "snort",
-      label: "attack",
       severities: [2, 1],
       protocol: "UDP",
       alertClass: "Potentially Bad Traffic",
@@ -27,7 +26,6 @@ describe("filterParams", () => {
     expect(params).toEqual({
       range: "Last 15 minutes",
       engine: "snort",
-      label: "attack",
       severity: "1,2",
       protocol: "UDP",
       class: "Potentially Bad Traffic",

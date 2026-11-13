@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 9.3)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 9.4)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -76,10 +76,8 @@ entry in `packets` is one such packet:
 - `packet` — its number, counted from 1 in time order across the file.
 - `time` — when the packet was stamped; when both engines alerted on it, the
   earlier of their two stamps.
-- `label` (9.3) — `lab attack` when the packet came from or went to a lab
-  attacker (an `attacker_ip` of `config/lab_phases.json`), `background` for
-  every other packet: what the alerts were raised on, for training and for
-  checking a model. Left out of every packet when no attacker is listed.
+- (9.4) No `label`: 9.3's `lab attack` / `background` for each packet was
+  removed on 13 November 2026, at the user's request.
 - `protocol` — the packet's protocol. Snort calls IGMP `IP`, so a packet only
   Snort alerted on can say `IP`. Left out when no engine names one (Suricata's
   unknown-Ethertype events).

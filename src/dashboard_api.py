@@ -189,9 +189,6 @@ def _alert_filter(request: Request, engines: Sequence[str]) -> AlertFilter:
             if part.strip() not in {"1", "2", "3", "4"}:
                 raise BadRequest("severity must be numbers from 1 to 4, like 1,2")
             severities.add(int(part))
-    label = params.get("label", "")
-    if label not in ("", "attack", "background"):
-        raise BadRequest("label must be attack or background")
     try:
         rule = parse_rule(params.get("rule", ""))
         source = parse_network(params.get("source", ""), "source")
@@ -212,7 +209,6 @@ def _alert_filter(request: Request, engines: Sequence[str]) -> AlertFilter:
         source=source,
         destination=destination,
         port=_int_param(request, "port", minimum=0, maximum=65535),
-        label=label,
         last=_int_param(request, "last", minimum=1, maximum=MAX_LAST),
         each=params.get("each", "").lower() in {"1", "true", "yes"},
     )

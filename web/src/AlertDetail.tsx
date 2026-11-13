@@ -95,18 +95,6 @@ export function AlertDetail({
           <dl className="facts">
             <Fact name="Time">{stamp(alert.time_ms)} PKT</Fact>
             <Fact name="Engine">{NAMES[alert.engine] ?? alert.engine}</Fact>
-            {alert.label && (
-              <Fact name="Label">
-                {alert.label === "attack" ? (
-                  <span className="tag attack">Lab attack</span>
-                ) : (
-                  "Background"
-                )}{" "}
-                <span className="muted">
-                  {alert.label === "attack" ? "from or to a lab attacker" : "no lab attacker on either side"}
-                </span>
-              </Fact>
-            )}
             <Fact name="Rule">
               {ruleName(alert)}{" "}
               <button type="button" className="link" onClick={() => onRule(ruleName(alert))}>
