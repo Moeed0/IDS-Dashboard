@@ -1,145 +1,104 @@
-// One JSON file with every alert of the engines this machine runs in a time
-// window (see docs/combined-json-format.md).
+// The alerts the Alert Explorer's filters choose, as one combined JSON file
+// (see docs/combined-json-format.md): two buttons, to download it or send it
+// to the LLM PC, whose hover text says what the file would hold. Only the
+// outcome of a click is written out.
 import { useEffect, useState } from "react";
-import { Tile } from "./Overview";
 import {
   NAMES,
   Unauthorized,
-  buildExport,
   count,
+  downloadSelection,
   errorText,
+  sendSelection,
   useApi,
-  type BuiltExport,
-  type ExportWindow,
   type Options,
+  type Params,
+  type SelectionInfo,
 } from "./api";
-import { fromPktInput, stamp, toPktInput } from "./time";
+import { stamp } from "./time";
 
-type Built = BuiltExport & { url: string; settings: string };
+// As often as the lists' newest alerts.
+const INFO_REFRESH_MS = 10_000;
 
-export function CombinedExport({ options, onUnauthorized }: { options: Options; onUnauthorized: () => void }) {
-  const [length, setLength] = useState(options.default_export_length);
-  const [anchor, setAnchor] = useState<"latest" | "chosen">("latest");
-  const [chosen, setChosen] = useState("");
-  const endMs = anchor === "chosen" ? fromPktInput(chosen) : undefined;
-  // The window ends where every engine's alerts are stored at the latest.
-  const { data: exportWindow, error } = useApi<ExportWindow>(
-    "/export/window",
-    { length, end_ms: endMs },
-    onUnauthorized,
-    30_000,
-  );
+/** What the file would hold, in words: "40 alerts (Snort 20 · Suricata 20)". */
+export function holding(options: Options, info: SelectionInfo): string {
+  const engines = options.engines.map((engine) => `${NAMES[engine]} ${count(info.alerts[engine] ?? 0)}`);
+  const cut = info.complete_end_ms !== null ? `, up to ${stamp(info.complete_end_ms)}, where both engines' alerts are stored` : "";
+  return `${count(info.total)} alerts${engines.length > 1 ? ` (${engines.join(" · ")})` : ""}${cut}`;
+}
 
-  // A chosen end starts at the latest complete time.
-  useEffect(() => {
-    if (anchor === "chosen" && !chosen && exportWindow) setChosen(toPktInput(exportWindow.complete_end_ms));
-  }, [anchor, chosen, exportWindow]);
+export function CombinedExport({
+  options,
+  params,
+  onUnauthorized,
+}: {
+  options: Options;
+  params: Params;
+  onUnauthorized: () => void;
+}) {
+  const { data: info, error } = useApi<SelectionInfo>("/export/selection", params, onUnauthorized, INFO_REFRESH_MS);
+  const [busy, setBusy] = useState<"download" | "send" | null>(null);
+  const [result, setResult] = useState<{ text: string; failed: boolean } | null>(null);
+  // Other filters choose other alerts: the last result was about those.
+  const chosen = JSON.stringify(params);
+  useEffect(() => setResult(null), [chosen]);
 
-  const [built, setBuilt] = useState<Built | null>(null);
-  const [building, setBuilding] = useState(false);
-  const [buildError, setBuildError] = useState("");
-  const settings = JSON.stringify([length, anchor, endMs]);
-  // The file stays downloadable until the next one replaces it.
-  useEffect(() => () => {
-    if (built) URL.revokeObjectURL(built.url);
-  }, [built]);
-
-  async function build() {
-    setBuilding(true);
-    setBuildError("");
+  async function run(kind: "download" | "send") {
+    setBusy(kind);
+    setResult(null);
     try {
-      const result = await buildExport(length, endMs);
-      setBuilt({ ...result, url: URL.createObjectURL(result.blob), settings });
+      if (kind === "download") {
+        setResult({ text: `Saved ${await downloadSelection(params)}`, failed: false });
+      } else {
+        const sent = await sendSelection(params);
+        const alerts = Object.values(sent.alerts).reduce((sum, value) => sum + (value ?? 0), 0);
+        setResult({
+          text: `Sent ${count(alerts)} alerts (${count(Math.ceil(sent.bytes / 1024))} KB) to ${sent.to} as ${sent.filename}`,
+          failed: false,
+        });
+      }
     } catch (reason) {
       if (reason instanceof Unauthorized) onUnauthorized();
-      else setBuildError(errorText(reason));
+      else setResult({ text: errorText(reason), failed: true });
     } finally {
-      setBuilding(false);
+      setBusy(null);
     }
   }
 
-  const shown = built?.settings === settings ? built : null;
-  // More alerts than one export may hold: building them could run the IDS
-  // machine out of memory.
-  const tooMany =
-    exportWindow?.stored_alerts !== undefined &&
-    exportWindow.max_alerts !== undefined &&
-    exportWindow.stored_alerts > exportWindow.max_alerts;
-  const engines = options.engines;
-  const total = shown ? engines.reduce((sum, engine) => sum + shown.alerts[engine], 0) : 0;
+  const tooMany = info !== null && info.total > info.max_alerts;
+  const ready = info !== null && info.total > 0 && !tooMany && busy === null;
+  const why =
+    error ||
+    (info === null
+      ? ""
+      : info.total === 0
+        ? "No alerts match the filters"
+        : tooMany
+          ? `One file holds at most ${count(info.max_alerts)} alerts: show only the newest few, or narrow the filters`
+          : "");
+  const downloadHint = why || (info ? `Download ${holding(options, info)}, as combined JSON` : "");
+  const sendHint = !options.send_to
+    ? "Send is off: put the LLM PC's address in IDS_LLM_URL in .env, then restart the dashboard"
+    : why || (info ? `Send ${holding(options, info)} to the LLM PC at ${options.send_to}` : "");
 
   return (
-    <section className="export">
-      <h2>Download: combined JSON</h2>
-      {/* Said outright: the list's filters above read as if they applied here too. */}
-      <p className="muted">
-        One file with every alert in the time window chosen here. The list's time range and search above don't
-        change it.
-      </p>
-      <div className="filters">
-        <label>
-          Length
-          <select value={length} onChange={(event) => setLength(event.target.value)}>
-            {options.export_lengths.map((choice) => (
-              <option key={choice}>{choice}</option>
-            ))}
-          </select>
-        </label>
-        <fieldset>
-          <legend>Ends at</legend>
-          <label className="choice">
-            <input type="radio" checked={anchor === "latest"} onChange={() => setAnchor("latest")} />
-            Latest complete time
-          </label>
-          <label className="choice">
-            <input type="radio" checked={anchor === "chosen"} onChange={() => setAnchor("chosen")} />
-            Chosen time
-          </label>
-        </fieldset>
-        {anchor === "chosen" && (
-          <label>
-            End (PKT)
-            <input type="datetime-local" step={60} value={chosen} onChange={(event) => setChosen(event.target.value)} />
-          </label>
-        )}
-      </div>
-      {error && <p className="error">{error}</p>}
-      {exportWindow && (
-        <p>
-          <strong>The file covers</strong> {stamp(exportWindow.start_ms)} → {stamp(exportWindow.end_ms)} PKT
-          {exportWindow.moved_back && " · moved back to the latest complete time"}
-          {exportWindow.stored_alerts !== undefined && ` · ${count(exportWindow.stored_alerts)} alerts in the database`}
-          {exportWindow.from_archive && ", older ones from the archive"}
-        </p>
+    <>
+      {/* A disabled button shows no hover text in every browser: its box does. */}
+      <span title={downloadHint}>
+        <button type="button" className="primary" disabled={!ready} onClick={() => run("download")}>
+          {busy === "download" ? "Preparing…" : "Download JSON"}
+        </button>
+      </span>
+      <span title={sendHint}>
+        <button type="button" disabled={!ready || !options.send_to} onClick={() => run("send")}>
+          {busy === "send" ? "Sending…" : "Send"}
+        </button>
+      </span>
+      {result && (
+        <span className={`outcome ${result.failed ? "error" : "sent"}`} title={result.text}>
+          {result.text}
+        </span>
       )}
-      {tooMany && exportWindow?.max_alerts !== undefined && (
-        <p className="error">
-          Too many alerts for one export: it holds at most {count(exportWindow.max_alerts)}. Choose a shorter length.
-        </p>
-      )}
-      <button type="button" className="primary" disabled={building || !exportWindow || tooMany} onClick={build}>
-        {building ? "Building…" : "Build combined JSON"}
-      </button>
-      {buildError && <p className="error">{buildError}</p>}
-      {shown && !total && <p className="muted">No alerts in this window.</p>}
-      {shown && total > 0 && (
-        <>
-          <h3>In this file</h3>
-          <div className="tiles">
-            <Tile label="Alerts" value={count(total)} />
-            {engines.length > 1 &&
-              engines.map((engine) => <Tile key={engine} label={NAMES[engine]} value={count(shown.alerts[engine])} />)}
-            <Tile label="Packets" value={count(shown.packets)} />
-            {engines.length > 1 && <Tile label="Both engines" value={count(shown.bothEnginePackets)} />}
-          </div>
-          <p>
-            <a className="button primary" href={shown.url} download={shown.filename}>
-              Download combined JSON
-            </a>{" "}
-            <span className="muted">{shown.filename}</span>
-          </p>
-        </>
-      )}
-    </section>
+    </>
   );
 }

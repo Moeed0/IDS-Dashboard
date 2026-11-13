@@ -1,0 +1,12 @@
+# Starts ids-rule-update.service every night at 04:15, after the 03:30
+# database backup; at the next start when the machine was off then.
+[Unit]
+Description=IDS rule update every night
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

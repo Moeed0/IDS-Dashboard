@@ -1,5 +1,6 @@
 // The alerts that have left the database: the archive's 10-day zips and the
-// day files waiting for theirs, to download (see README.md, "Old alerts").
+// day files waiting for theirs, to download (see README.md, "Old alerts"),
+// under the Alert Explorer's "Old alerts" fold.
 import { useState } from "react";
 import { Unauthorized, count, downloadArchiveFile, errorText, useApi, type ArchiveList } from "./api";
 
@@ -18,8 +19,10 @@ export function OldAlerts({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [saving, setSaving] = useState("");
   const [saveError, setSaveError] = useState("");
 
-  // No archive on this machine (IDS_ALERT_ARCHIVE_DAYS=0): nothing to show.
-  if (data && data.keep_days === undefined) return null;
+  // No archive on this machine (IDS_ALERT_ARCHIVE_DAYS=0).
+  if (data && data.keep_days === undefined) {
+    return <p className="muted">None: this machine deletes the alerts past the database's limit.</p>;
+  }
 
   async function save(name: string) {
     setSaving(name);
@@ -42,15 +45,12 @@ export function OldAlerts({ onUnauthorized }: { onUnauthorized: () => void }) {
     : [];
 
   return (
-    <section>
-      <div className="section-head">
-        <h2>Old alerts</h2>
-        {data && (
-          <span className="muted">
-            kept {data.keep_days} days, a zip for each {data.zip_days}
-          </span>
-        )}
-      </div>
+    <>
+      {data && (
+        <p className="muted">
+          The alerts past the database's limit, kept {data.keep_days} days, a zip for each {data.zip_days}.
+        </p>
+      )}
       {error && <p className="error">{error}</p>}
       {data && !files.length && (
         <p className="muted">None yet. Alerts move here once the database is past its limit.</p>
@@ -87,6 +87,6 @@ export function OldAlerts({ onUnauthorized }: { onUnauthorized: () => void }) {
         </div>
       )}
       {saveError && <p className="error">{saveError}</p>}
-    </section>
+    </>
   );
 }

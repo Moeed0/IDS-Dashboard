@@ -8,6 +8,13 @@ Description=IDS dashboard database backup
 Type=oneshot
 User=@USER@
 WorkingDirectory=@REPO_DIR@
+# Run late after a boot (Persistent=true catches up a missed night at once):
+# until 15 minutes after boot, so it doesn't meet Snort and Suricata loading
+# their rules, the collector catching up and the desktop starting, all on the
+# same slow disk. At the nightly time the VM has been up longer: no wait.
+# ($$ is a $ for the shell; systemd would read a single one itself.)
+ExecStartPre=/bin/sh -c 'up=$$(cut -d. -f1 /proc/uptime); [ "$$up" -ge 900 ] || sleep $$((900 - up))'
+TimeoutStartSec=infinity
 ExecStart=@REPO_DIR@/.venv/bin/python scripts/backup_database.py
 # Behind the engines and the collector for CPU and disk.
 Nice=19

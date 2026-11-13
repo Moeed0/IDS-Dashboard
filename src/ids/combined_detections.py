@@ -60,7 +60,7 @@ from ids.export_cleanup import drop_default_gid
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "9.2"
+SCHEMA_VERSION = "9.3"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -476,7 +476,23 @@ def ids_output(engine: str, native: Mapping[str, Any]) -> dict[str, Any]:
             key: value for key, value in dns.items()
             if key not in _DROPPED_DNS_FIELDS
         }
+    # Snort's payload (b64_data) as text, as Suricata's payload_printable (9.3).
+    if engine == "snort" and native.get("b64_data"):
+        output["payload_printable"] = printable_payload(native["b64_data"])
     return prune_empty(drop_default_gid(strip_links(output)))
+
+
+def printable_payload(encoded: Any) -> str:
+    """Base64 bytes as text, the way Suricata writes payload_printable:
+    printable ASCII, tabs and line breaks kept, every other byte a dot. ""
+    when it isn't Base64."""
+    try:
+        raw = base64.b64decode(str(encoded), validate=True)
+    except (ValueError, TypeError):
+        return ""
+    return "".join(
+        chr(byte) if 32 <= byte < 127 or byte in (9, 10, 13) else "." for byte in raw
+    )
 
 
 # Fields of the IDS output that describe the rule. Each is given once, in the
@@ -1241,6 +1257,15 @@ def rebuild_ids_output(
     return output
 
 
+def _label(facts: Mapping[str, Any], attackers: set[str]) -> str | None:
+    """"lab attack" for a packet from or to a lab attacker, "background" for
+    any other; None without attackers to go by."""
+    if not attackers:
+        return None
+    ends = {_address(facts["src_address"]), _address(facts["dst_address"])}
+    return "lab attack" if ends & attackers else "background"
+
+
 def _packet_document(
     number: int,
     packet: _Packet,
@@ -1248,6 +1273,7 @@ def _packet_document(
     flow: int | None,
     outputs: Mapping[int, dict[str, Any]],
     rule_ids: Mapping[str, str],
+    label: str | None = None,
 ) -> dict[str, Any]:
     """One packet: what it is, its flow when the file's flows hold
     something about it, how the two engines' alerts were matched when both
@@ -1258,6 +1284,8 @@ def _packet_document(
     document: dict[str, Any] = {
         "packet": number,
         "time": _iso(time_us),
+        # Whether a lab attacker sent or got it (9.3).
+        "label": label,
         # Left out when no engine names one (Suricata's unknown-Ethertype
         # events).
         "protocol": facts["protocol"],
@@ -1413,20 +1441,30 @@ def build_combined_detections(
     length_label: str | None = None,
     rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None] | None = None,
     generated_at: datetime | None = None,
+    trim_to_window: bool = True,
+    lab_attackers: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Build the combined Snort + Suricata document for one time window.
 
     ``rows`` are alert rows with ``engine``, ``event_ts_utc`` and the native
     event (``raw_json`` text or a ``native_event`` dict). ``rule_intelligence``
     is called once per rule with (engine, gid, sid, message) and returns the
-    offline intelligence for that rule.
+    offline intelligence for that rule. With ``trim_to_window`` false every
+    row is kept: the caller chose them (the window then only says when).
+    With ``lab_attackers`` (the lab's attacking addresses), each packet says
+    whether it came from or went to one of them (``label``: "lab attack")
+    or not ("background").
 
     The document is a timeline of the packets the alerts are on, oldest
     first; a packet both engines alerted on is one entry with both engines'
     parts. Every alert is listed.
     """
-    matches = _window_matches(rows, window_start, window_end)
+    if trim_to_window:
+        matches = _window_matches(rows, window_start, window_end)
+    else:
+        matches = [match for match in map(_to_match, rows) if match is not None]
     packets = _packets(matches)
+    attackers = {address for address in map(_address, lab_attackers) if address}
 
     rule_facts: dict[str, dict[str, Any]] = {}
     for match in matches:
@@ -1559,6 +1597,7 @@ def build_combined_detections(
             _packet_document(
                 number, packet, facts[index],
                 flow_numbers.get(_flow_key(facts[index])), outputs, rule_ids,
+                _label(facts[index], attackers),
             )
             for index, (number, packet) in enumerate(enumerate(packets, start=1))
         ],

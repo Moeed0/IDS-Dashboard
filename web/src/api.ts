@@ -29,6 +29,11 @@ export interface Options {
   default_export_length: string;
   time_ranges: { label: string; ms: number | null }[];
   page_sizes: number[];
+  /** The quick choices for the last N alerts, and the most N may be. */
+  last_choices: number[];
+  max_last: number;
+  /** Where Send sends the chosen alerts (host:port); null while it is off. */
+  send_to: string | null;
   /** Minutes between the chart's points. */
   chart_steps: number[];
   default_chart_step: number;
@@ -163,31 +168,70 @@ export interface AlertRow {
   service: string | null;
   src: string | null;
   dst: string | null;
-  /** Its packet: the same number on every alert on that packet, in every list. */
-  packet?: number;
+  /** Its UID: 7 characters from its minute and its number in that minute,
+   * which no other alert has. */
+  uid?: string;
+  /** Its packet: the UID of the packet's first stored alert, the same on
+   * every alert on that packet, in every list. */
+  packet?: string;
   /** Both engines alerted on its packet. */
   both: boolean;
+  /** From or to a lab attacker (config/lab_phases.json), or not. */
+  label?: "attack" | "background";
+}
+
+/** One alert, whole (/alerts/{id}): as the lists show it, the other alerts
+ * on its packet, and what the combined JSON gives for that packet. */
+export interface AlertDetails {
+  alert: AlertRow;
+  same_packet: AlertRow[];
+  /** Each rule on the packet, by its name in the file ("snort:116:444"). */
+  rules?: Record<string, Record<string, unknown>>;
+  cves?: Record<string, unknown>;
+  attack_techniques?: Record<string, unknown>;
+  flows?: Record<string, unknown>;
+  packets?: unknown[];
 }
 
 export interface AlertPage {
   total: number;
+  /** How many match before "last N" keeps the newest. */
+  matching: number;
   page: number;
   pages: number;
   page_size: number;
   rows: AlertRow[];
 }
 
-export interface ExportWindow {
-  start_ms: number;
-  end_ms: number;
-  complete_end_ms: number;
-  moved_back: boolean;
-  /** The window's alerts in the database. */
-  stored_alerts?: number;
-  /** The most one export holds. */
-  max_alerts?: number;
-  /** The window starts before the database's oldest alert: older ones come from the archive. */
-  from_archive?: boolean;
+/** What a download or send of the filtered alerts would hold (/export/selection). */
+export interface SelectionInfo {
+  alerts: Partial<Record<Engine, number>>;
+  total: number;
+  /** The first and last alert's time; null without alerts. */
+  first_ms: number | null;
+  last_ms: number | null;
+  /** With both engines, the latest complete time it stops at; null with one. */
+  complete_end_ms: number | null;
+  /** The most one file holds. */
+  max_alerts: number;
+}
+
+/** The protocols, classes and services the stored alerts have (/alerts/values). */
+export interface FilterValues {
+  protocols: string[];
+  classes: string[];
+  services: string[];
+}
+
+/** What Send says once the LLM PC has taken the file. */
+export interface SentSelection {
+  sent: true;
+  to: string;
+  filename: string;
+  bytes: number;
+  alerts: Partial<Record<Engine, number>>;
+  packets: number;
+  both_engine_packets: number;
 }
 
 export interface Storage {
@@ -222,16 +266,6 @@ export interface ArchiveList {
   zip_days?: number;
 }
 
-export interface BuiltExport {
-  filename: string;
-  blob: Blob;
-  startMs: number;
-  endMs: number;
-  alerts: Record<Engine, number>;
-  packets: number;
-  bothEnginePackets: number;
-}
-
 export type Params = Record<string, string | number | undefined>;
 
 /** The API refused the token: the page asks for it again. */
@@ -263,7 +297,7 @@ export function errorText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-async function request(path: string, params: Params, signal?: AbortSignal): Promise<Response> {
+async function request(path: string, params: Params, signal?: AbortSignal, method = "GET"): Promise<Response> {
   const query = new URLSearchParams();
   for (const [name, value] of Object.entries(params)) {
     if (value !== undefined && value !== "") query.set(name, String(value));
@@ -272,6 +306,7 @@ async function request(path: string, params: Params, signal?: AbortSignal): Prom
   let response: Response;
   try {
     response = await fetch(text ? `${path}?${text}` : path, {
+      method,
       headers: { Authorization: `Bearer ${sessionToken}` },
       signal,
     });
@@ -320,32 +355,35 @@ export async function getJson<T>(path: string, params: Params = {}, signal?: Abo
   }
 }
 
-/** Saves one of the archive's files, fetched with the token. */
-export async function downloadArchiveFile(name: string): Promise<void> {
-  const response = await request(`/archive/${encodeURIComponent(name)}`, {});
-  const url = URL.createObjectURL(await response.blob());
+/** Hands a fetched file to the browser to save. */
+function save(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = name;
+  link.download = filename;
   link.click();
   // After the browser has taken the file.
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-/** Builds the combined JSON for the window /export/window gives. */
-export async function buildExport(length: string, endMs?: number): Promise<BuiltExport> {
-  const response = await request("/export", { length, end_ms: endMs });
-  const header = (name: string) => Number(response.headers.get(name) ?? 0);
+/** Saves one of the archive's files, fetched with the token. */
+export async function downloadArchiveFile(name: string): Promise<void> {
+  const response = await request(`/archive/${encodeURIComponent(name)}`, {});
+  save(await response.blob(), name);
+}
+
+/** Saves the combined JSON of the alerts the filters choose; its file name. */
+export async function downloadSelection(params: Params): Promise<string> {
+  const response = await request("/export/selection/file", params);
   const disposition = response.headers.get("Content-Disposition") ?? "";
-  return {
-    filename: /filename="([^"]+)"/.exec(disposition)?.[1] ?? "snort_suricata_combined.json",
-    blob: await response.blob(),
-    startMs: header("X-Window-Start-Ms"),
-    endMs: header("X-Window-End-Ms"),
-    alerts: { snort: header("X-Alerts-Snort"), suricata: header("X-Alerts-Suricata") },
-    packets: header("X-Packets"),
-    bothEnginePackets: header("X-Both-Engine-Packets"),
-  };
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "snort_suricata_combined.json";
+  save(await response.blob(), filename);
+  return filename;
+}
+
+/** Sends the combined JSON of the alerts the filters choose to the LLM PC. */
+export async function sendSelection(params: Params): Promise<SentSelection> {
+  return (await (await request("/export/selection/send", params, undefined, "POST")).json()) as SentSelection;
 }
 
 /** What useApi gives. */

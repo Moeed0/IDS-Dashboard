@@ -116,6 +116,19 @@ def get_api_token() -> str:
     return _value_from_env("IDS_API_TOKEN", "").strip()
 
 
+def llm_target() -> tuple[str | None, str | None]:
+    """
+    Where the Alert Explorer's Send button sends the chosen alerts
+    (IDS_LLM_URL, an http:// or https:// address on the LLM PC) and the
+    token it sends with them (IDS_LLM_TOKEN); None for each that is not
+    set. Kept out of Settings, as the token must never be printed.
+    """
+    url = _value_from_env("IDS_LLM_URL", "").strip() or None
+    if url is not None and not url.lower().startswith(("http://", "https://")):
+        raise ValueError(f"IDS_LLM_URL must start with http:// or https://, got {url!r}")
+    return url, _value_from_env("IDS_LLM_TOKEN", "").strip() or None
+
+
 def api_token_required() -> bool:
     """
     False when IDS_API_REQUIRE_TOKEN is false (or no, off, 0): the dashboard

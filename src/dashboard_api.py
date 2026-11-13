@@ -20,10 +20,14 @@ import os
 import re
 import secrets
 import sqlite3
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -36,23 +40,39 @@ from starlette.types import Scope
 
 from ids.alert_archive import TooManyAlerts, archive_contents, archive_file
 from ids.combined_detections import PKT, WINDOW_LENGTHS
-from ids.config import ENV_FILE, api_token_required, engine_sources, get_api_token, get_settings
+from ids.config import (
+    ENV_FILE,
+    api_token_required,
+    engine_sources,
+    get_api_token,
+    get_settings,
+    llm_target,
+)
 from ids.dashboard_data import (
     CHART_STEPS,
     DEFAULT_CHART_STEP,
     DEFAULT_TOP_RULES_LENGTH,
     ENGINES,
     EXPORT_MAX_ALERTS,
+    LAST_CHOICES,
     LIVE_STEP,
+    MAX_LAST,
     PAGE_SIZES,
     TIME_RANGES,
+    AlertFilter,
+    alert_detail,
     alerts,
     combined_export,
     export_window,
+    filter_values,
     live,
     offline_rule_intelligence,
     overview,
+    parse_network,
+    parse_rule,
     rule_pairs,
+    selection,
+    selection_export,
     status,
 )
 from ids.uptime import machine_off_periods
@@ -70,6 +90,30 @@ EXPORT_HEADERS = (
 )
 # Letters and digits that cannot be taken for one another (no i, l, o or u).
 TOKEN_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+# How long Send waits for the LLM PC to take a file.
+SEND_TIMEOUT_SECONDS = 60
+# The filter choices change slowly: read them from the database this often.
+FILTER_VALUES_SECONDS = 300
+
+
+def post_file(url: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, str]:
+    """POSTs a file to ``url``: the answer's status and the start of its
+    text. OSError when the address can't be reached."""
+    request = urllib.request.Request(url, data=body, headers=dict(headers), method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=SEND_TIMEOUT_SECONDS) as answer:
+            return answer.status, answer.read(500).decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(500).decode("utf-8", "replace")
+
+
+def _target(url: str) -> str:
+    """An address as the page shows it: host and port, without any password."""
+    parts = urlsplit(url)
+    host = parts.hostname or url
+    return f"[{host}]:{parts.port}" if parts.port and ":" in host else (
+        f"{host}:{parts.port}" if parts.port else host
+    )
 
 
 class PageFiles(StaticFiles):
@@ -122,6 +166,56 @@ def _length(request: Request, name: str = "length", default: str = DEFAULT_EXPOR
     return length
 
 
+def _alert_filter(request: Request, engines: Sequence[str]) -> AlertFilter:
+    """The Alert Explorer's filters in the query (see docs/react-native-port.md)."""
+    params = request.query_params
+    engine = params.get("engine") or None
+    if engine not in (None, *engines):
+        raise BadRequest(f"engine must be one of: {', '.join(engines)}")
+    since_ms = _int_param(request, "since_ms")
+    time_range = params.get("range")
+    if time_range is not None:
+        if since_ms is not None:
+            raise BadRequest("give range or since_ms, not both")
+        if time_range not in TIME_RANGES:
+            raise BadRequest(f"range must be one of: {', '.join(TIME_RANGES)}")
+        # From the server's clock, which the stored times follow.
+        span = TIME_RANGES[time_range]
+        since_ms = int((datetime.now(tz=PKT) - span).timestamp() * 1000) if span else None
+    severities: set[int] = set()
+    for part in params.get("severity", "").split(","):
+        if part.strip():
+            if part.strip() not in {"1", "2", "3", "4"}:
+                raise BadRequest("severity must be numbers from 1 to 4, like 1,2")
+            severities.add(int(part))
+    label = params.get("label", "")
+    if label not in ("", "attack", "background"):
+        raise BadRequest("label must be attack or background")
+    try:
+        rule = parse_rule(params.get("rule", ""))
+        source = parse_network(params.get("source", ""), "source")
+        destination = parse_network(params.get("destination", ""), "destination")
+    except ValueError as error:
+        raise BadRequest(str(error)) from None
+    return AlertFilter(
+        engine=engine,
+        since_ms=since_ms,
+        until_ms=_int_param(request, "until_ms"),
+        search=params.get("search", "")[:200],
+        severities=tuple(sorted(severities)),
+        protocol=params.get("protocol", "")[:40],
+        classification=params.get("class", "")[:200],
+        service=params.get("service", "")[:40],
+        rule=rule,
+        source=source,
+        destination=destination,
+        port=_int_param(request, "port", minimum=0, maximum=65535),
+        label=label,
+        last=_int_param(request, "last", minimum=1, maximum=MAX_LAST),
+        each=params.get("each", "").lower() in {"1", "true", "yes"},
+    )
+
+
 def create_app(
     *,
     db_path: Path | str,
@@ -138,6 +232,9 @@ def create_app(
     stats_files: Mapping[str, Path | str] | None = None,
     export_max_alerts: int = EXPORT_MAX_ALERTS,
     backup_dir: Path | str | None = None,
+    send_url: str | None = None,
+    send_token: str | None = None,
+    sender: Callable[[str, bytes, Mapping[str, str]], tuple[int, str]] = post_file,
 ) -> Starlette:
     """The API over the live database at ``db_path``, answering requests
     that send ``token`` (every request when it is None), and the built React
@@ -146,7 +243,9 @@ def create_app(
     machine runs (IDS_ENGINES), the alerts that have left the database from
     ``archive_dir`` (kept as ``archive_settings`` says), when the machine was
     off from ``off_periods``, and each engine's drops from its statistics
-    file in ``stats_files``. One export holds at most ``export_max_alerts``."""
+    file in ``stats_files``. One export holds at most ``export_max_alerts``.
+    Send POSTs the chosen alerts' file to ``send_url`` (none: Send is off)
+    with ``send_token``, through ``sender``."""
     if token == "":
         raise ValueError("the API needs a token, or None to let every request in")
 
@@ -196,6 +295,10 @@ def create_app(
                 for label, span in TIME_RANGES.items()
             ],
             "page_sizes": list(PAGE_SIZES),
+            "last_choices": list(LAST_CHOICES),
+            "max_last": MAX_LAST,
+            # Where Send sends the chosen alerts; null when it is off.
+            "send_to": _target(send_url) if send_url else None,
             "chart_steps": list(CHART_STEPS),
             "default_chart_step": DEFAULT_CHART_STEP,
             "live_step_seconds": int(LIVE_STEP.total_seconds()),
@@ -235,30 +338,117 @@ def create_app(
         return FileResponse(path, filename=name)
 
     def alert_list(request: Request) -> Response:
-        engine = request.query_params.get("engine") or None
-        if engine not in (None, *engines):
-            raise BadRequest(f"engine must be one of: {', '.join(engines)}")
-        since_ms = _int_param(request, "since_ms")
-        time_range = request.query_params.get("range")
-        if time_range is not None:
-            if since_ms is not None:
-                raise BadRequest("give range or since_ms, not both")
-            if time_range not in TIME_RANGES:
-                raise BadRequest(f"range must be one of: {', '.join(TIME_RANGES)}")
-            # From the server's clock, which the stored times follow.
-            span = TIME_RANGES[time_range]
-            since_ms = int((datetime.now(tz=PKT) - span).timestamp() * 1000) if span else None
         return JSONResponse(alerts(
             db_path,
-            engine=engine,
-            since_ms=since_ms,
-            search=request.query_params.get("search", "")[:200],
+            filters=_alert_filter(request, engines),
             page=_int_param(request, "page", default=1, minimum=1),
             page_size=_int_param(
                 request, "page_size", default=25, minimum=1, maximum=max(PAGE_SIZES)
             ),
             engines=engines,
         ))
+
+    def alert_screen(request: Request) -> Response:
+        """Everything about one alert, for the Alert Explorer's side panel."""
+        found = alert_detail(
+            db_path, request.path_params["alert_id"], rule_intelligence=rule_intelligence,
+            engines=engines,
+        )
+        if found is None:
+            return JSONResponse({"error": "no such alert"}, status_code=404)
+        return JSONResponse(found)
+
+    # When the filter choices were read, and what they were.
+    values_cache: dict[str, Any] = {}
+
+    def alert_values(request: Request) -> Response:
+        """The protocols, classes and services the filters offer."""
+        if time.monotonic() - values_cache.get("read", -FILTER_VALUES_SECONDS) >= FILTER_VALUES_SECONDS:
+            values_cache.update(values=filter_values(db_path, engines=engines), read=time.monotonic())
+        return JSONResponse(values_cache["values"])
+
+    def selection_screen(request: Request) -> Response:
+        """What a download or send of the filtered alerts would hold."""
+        return JSONResponse(selection(
+            db_path, _alert_filter(request, engines), engines=engines, max_alerts=export_max_alerts,
+        ))
+
+    def built_selection(request: Request) -> dict[str, Any] | Response:
+        """The filtered alerts' file, or the answer saying why there is none."""
+        try:
+            built = selection_export(
+                db_path, _alert_filter(request, engines), rule_intelligence=rule_intelligence,
+                engines=engines, max_alerts=export_max_alerts,
+            )
+        except TooManyAlerts as exc:
+            return JSONResponse({"error": str(exc)}, status_code=413)
+        if built is None:
+            return JSONResponse({"error": "no alerts match the filters"}, status_code=404)
+        return built
+
+    def selection_headers(built: Mapping[str, Any]) -> dict[str, str]:
+        counts = built["alerts"]
+        values = (
+            built["start_ms"], built["end_ms"], counts.get("snort", 0),
+            counts.get("suricata", 0), built["packets"], built["both_engine_packets"],
+        )
+        return {name: str(value) for name, value in zip(EXPORT_HEADERS, values)}
+
+    def selection_file(request: Request) -> Response:
+        """The combined JSON file of the filtered alerts."""
+        built = built_selection(request)
+        if isinstance(built, Response):
+            return built
+        return Response(
+            built["json"],
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="{built["filename"]}"',
+                **selection_headers(built),
+            },
+        )
+
+    def send_selection(request: Request) -> Response:
+        """Sends the filtered alerts' file to the LLM PC (IDS_LLM_URL)."""
+        if not send_url:
+            return JSONResponse(
+                {"error": "Send is off: put the LLM PC's address in IDS_LLM_URL in .env "
+                          "and restart the dashboard"},
+                status_code=503,
+            )
+        built = built_selection(request)
+        if isinstance(built, Response):
+            return built
+        body = built["json"].encode("utf-8")
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Filename": built["filename"],
+            **selection_headers(built),
+        }
+        if send_token:
+            headers["Authorization"] = f"Bearer {send_token}"
+        target = _target(send_url)
+        try:
+            answer, text = sender(send_url, body, headers)
+        except OSError as exc:
+            reason = getattr(exc, "reason", exc)
+            return JSONResponse(
+                {"error": f"could not reach the LLM PC at {target}: {reason}"}, status_code=502,
+            )
+        if not 200 <= answer < 300:
+            return JSONResponse(
+                {"error": f"the LLM PC at {target} answered {answer}: {text.strip()[:200]}"},
+                status_code=502,
+            )
+        return JSONResponse({
+            "sent": True,
+            "to": target,
+            "filename": built["filename"],
+            "bytes": len(body),
+            "alerts": built["alerts"],
+            "packets": built["packets"],
+            "both_engine_packets": built["both_engine_packets"],
+        })
 
     def rule_pair_list(request: Request) -> Response:
         return JSONResponse(rule_pairs(db_path, engines=engines))
@@ -309,9 +499,14 @@ def create_app(
         Route("/status", guarded(status_screen)),
         Route("/live", guarded(live_chart)),
         Route("/alerts", guarded(alert_list)),
+        Route("/alerts/values", guarded(alert_values)),
+        Route("/alerts/{alert_id:int}", guarded(alert_screen)),
         Route("/rule-pairs", guarded(rule_pair_list)),
         Route("/export/window", guarded(export_window_screen)),
         Route("/export", guarded(export_file)),
+        Route("/export/selection", guarded(selection_screen)),
+        Route("/export/selection/file", guarded(selection_file)),
+        Route("/export/selection/send", guarded(send_selection), methods=["POST"]),
         Route("/archive", guarded(archive_list)),
         Route("/archive/{name}", guarded(archive_download)),
     ]
@@ -326,7 +521,7 @@ def create_app(
             Middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
-                allow_methods=["GET"],
+                allow_methods=["GET", "POST"],
                 allow_headers=["Authorization"],
                 expose_headers=["Content-Disposition", *EXPORT_HEADERS],
             ),
@@ -407,6 +602,7 @@ def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
     settings = get_settings()
+    send_url, send_token = llm_target()
     token = _token() if api_token_required() else None
     if token is None:
         print(
@@ -432,6 +628,8 @@ def main(argv: list[str] | None = None) -> None:
         },
         export_max_alerts=settings.export_max_alerts,
         backup_dir=settings.backup_dir if settings.backup_keep else None,
+        send_url=send_url,
+        send_token=send_token,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

@@ -141,9 +141,11 @@ def restore_database(
     The backup is unpacked and checked next to the database first, so a
     damaged backup changes nothing. The database it replaces (with its -wal
     and -shm files) is kept beside it as ids_live-replaced-<time>.db, and
-    the state file as <name>.before-restore. Only while the collector and
-    the dashboard are stopped. The kept database's path (which doesn't
-    exist when there was no database)."""
+    the state file as <name>.before-restore. The collector's last_uid mark,
+    beside the state file, stays as it is, so the alerts stored again get
+    new UIDs after the last one given, never an archived alert's. Only
+    while the collector and the dashboard are stopped. The kept database's
+    path (which doesn't exist when there was no database)."""
     now = now or datetime.now()
     backup, db_path, state_file = Path(backup), Path(db_path), Path(state_file)
     restoring = db_path.with_name(f"{db_path.name}.restoring")

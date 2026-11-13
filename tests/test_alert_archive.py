@@ -94,6 +94,9 @@ def test_the_alerts_past_the_limit_go_to_the_files_of_their_pkt_days(tmp_path):
         3, "suricata", 2000003, json.dumps({"number": 3}),
     )
     assert alert["event_ts_utc"] == _ms("2026-11-06T00:30:00+05:00")
+    # The UID as the page shows it: minute 6,930 (5 Nov, 19:30 UTC) times
+    # 16,384, the minute's first alert.
+    assert alert["uid"] == "03C9000"
 
     # A later run adds to the day's file.
     _add(conn, ["2026-11-06T11:00:00+05:00"], first=6)

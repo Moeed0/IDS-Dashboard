@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+
+from ids.uids import assign_uids
 
 
 ALERT_BASE_COLUMNS = {
@@ -47,6 +50,8 @@ ALERT_PHASE1_COLUMNS = {
     "rule_key": "TEXT",
     "correlation_group_id": "TEXT",
     "event_hash": "TEXT",
+    # The alert's 6-character UID, as its number (ids/uids.py).
+    "uid": "INTEGER",
 }
 
 
@@ -155,7 +160,8 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             severity INTEGER,
             rule_key TEXT,
             correlation_group_id TEXT,
-            event_hash TEXT
+            event_hash TEXT,
+            uid INTEGER
         )
         """
     )
@@ -249,6 +255,13 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
 
     conn.execute(
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_alerts_uid
+        ON alerts(uid)
+        """
+    )
+
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_alerts_correlation_group_id
         ON alerts(
             correlation_group_id,
@@ -267,7 +280,31 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
     )
 
 
-def ensure_schema(conn: sqlite3.Connection) -> None:
+# The Alert Explorer's filters, each with the engine and time after it: a
+# filter's alerts are counted, and come newest first, from its index alone,
+# without reading the alerts (which are large) one by one. The expressions
+# are the ones ids.dashboard_data's filters use.
+FILTER_INDEXES = {
+    "idx_alerts_severity": "MIN(4, MAX(1, COALESCE(severity, priority, 4))), engine, event_ts_utc",
+    "idx_alerts_protocol": "lower(protocol), engine, event_ts_utc",
+    "idx_alerts_class": "lower(classification), engine, event_ts_utc",
+    "idx_alerts_service": "lower(service), engine, event_ts_utc",
+    "idx_alerts_sid": "sid, gid, rev, engine, event_ts_utc",
+    "idx_alerts_src_addr": "src_addr, engine, event_ts_utc",
+    "idx_alerts_dst_addr": "dst_addr, engine, event_ts_utc",
+    "idx_alerts_src_port": "src_port, engine, event_ts_utc",
+    "idx_alerts_dst_port": "dst_port, engine, event_ts_utc",
+}
+
+
+def _create_filter_indexes(conn: sqlite3.Connection) -> None:
+    for name, columns in FILTER_INDEXES.items():
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON alerts({columns})")
+
+
+def ensure_schema(conn: sqlite3.Connection, uid_mark: Path | None = None) -> None:
+    """Creates or updates the tables and indexes, and gives the alerts
+    stored before UIDs theirs (ids/uids.py, ``uid_mark`` its mark file)."""
     _create_tables(conn)
 
     _add_missing_columns(
@@ -295,6 +332,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
 
     _create_indexes(conn)
+    _create_filter_indexes(conn)
+    # UIDs for the alerts stored before them (after the indexes, which
+    # assign_uids looks them up through).
+    assign_uids(conn, uid_mark)
     _create_manual_correlation_guards(conn)
 
     conn.commit()

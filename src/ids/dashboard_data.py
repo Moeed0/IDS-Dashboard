@@ -11,10 +11,13 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import re
 import shutil
 import sqlite3
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -38,6 +41,7 @@ from ids.combined_detections import (
 )
 from ids.config import KNOWN_ENGINES
 from ids.ids_config import read_network_variables
+from ids.uids import uid_text
 from ids.uptime import off_during
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +68,11 @@ RULE_PAIRS = 10
 PROC_DIR = Path("/proc")
 # Time ranges of the alert list; None lists every stored alert.
 TIME_RANGES = {
+    "Last 5 minutes": timedelta(minutes=5),
+    "Last 10 minutes": timedelta(minutes=10),
+    "Last 15 minutes": timedelta(minutes=15),
+    "Last 30 minutes": timedelta(minutes=30),
+    "Last hour": timedelta(hours=1),
     "Last 24 hours": timedelta(hours=24),
     "Last 7 days": timedelta(days=7),
     "Last 30 days": timedelta(days=30),
@@ -118,15 +127,26 @@ def _known(value: Any) -> Any:
 
 
 def _lab_attacker_ips() -> set[str]:
+    """The lab attackers' addresses (config/lab_phases.json), read again
+    only when the file changes: every alert row is checked against them."""
     try:
-        phases = json.loads(LAB_PHASES_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        changed = LAB_PHASES_FILE.stat().st_mtime_ns
+    except OSError:
         return set()
-    return {
+    return set(_attackers_in(LAB_PHASES_FILE, changed))
+
+
+@lru_cache(maxsize=4)
+def _attackers_in(path: Path, changed: int) -> frozenset[str]:
+    try:
+        phases = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    return frozenset(
         str(phase.get("attacker_ip"))
         for phase in phases.values()
         if isinstance(phase, dict) and phase.get("attacker_ip")
-    }
+    )
 
 
 def _inside(ip: str, networks: str | None) -> bool:
@@ -347,6 +367,174 @@ _SEARCHED = " || ' ' || ".join(
 )
 
 
+# An alert's severity as the lists show it: 1 (the most severe) to 4.
+_SEVERITY = "MIN(4, MAX(1, COALESCE(severity, priority, 4)))"
+# The most alerts "last N" takes: as many as one export holds.
+MAX_LAST = EXPORT_MAX_ALERTS
+# The Alert Explorer's quick choices for "last N" (any number can be typed).
+LAST_CHOICES = (5, 10, 20)
+
+
+@dataclass(frozen=True)
+class AlertFilter:
+    """Which stored alerts the Alert Explorer's lists, download and send take:
+    every alert of the engines when nothing is set.
+
+    ``engine`` takes one engine's alerts; ``since_ms`` and ``until_ms`` a
+    time range; ``search`` what the search box finds; ``severities`` (1 to
+    4) any of those; ``protocol``, ``classification`` and ``service`` that
+    value, in any case; ``rule`` (gid, sid, rev; None for any) that rule;
+    ``source`` and ``destination`` an address or network (parse_network);
+    ``port`` that port on either side; ``label`` "attack" the alerts from or
+    to a lab attacker (config/lab_phases.json), "background" the others.
+    ``last`` takes only the newest that many of them, and with ``each`` that
+    many of each engine (a download of the side-by-side lists)."""
+
+    engine: str | None = None
+    since_ms: int | None = None
+    until_ms: int | None = None
+    search: str = ""
+    severities: tuple[int, ...] = ()
+    protocol: str = ""
+    classification: str = ""
+    service: str = ""
+    rule: tuple[int | None, int | None, int | None] | None = None
+    source: str = ""
+    destination: str = ""
+    port: int | None = None
+    label: str = ""
+    last: int | None = None
+    each: bool = False
+
+
+def parse_rule(text: str) -> tuple[int | None, int | None, int | None] | None:
+    """(gid, sid, rev) from a rule as the lists show it: SID, GID:SID or
+    GID:SID:Rev; None when empty. ValueError otherwise."""
+    text = text.strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) > 3 or not all(part.isdigit() for part in parts):
+        raise ValueError("rule must be a SID, GID:SID or GID:SID:Rev, like 2001119 or 116:444")
+    numbers = [int(part) for part in parts]
+    if len(numbers) == 1:
+        return None, numbers[0], None
+    return numbers[0], numbers[1], numbers[2] if len(numbers) == 3 else None
+
+
+def parse_network(text: str, name: str = "address") -> str:
+    """The network an address filter matches, written out (192.168.50.0/24):
+    from an address (192.168.50.122, fe80::1), a network (192.168.50.0/24)
+    or an IPv4 address's first parts ending in a dot or .* (192.168.50.);
+    "" when empty. ValueError, naming the filter ``name``, otherwise."""
+    text = text.strip()
+    if not text:
+        return ""
+    partial = re.fullmatch(r"(\d{1,3}(?:\.\d{1,3}){0,2})\.\*?", text)
+    if partial:
+        parts = partial.group(1).split(".")
+        text = ".".join(parts + ["0"] * (4 - len(parts))) + f"/{8 * len(parts)}"
+    try:
+        return str(ipaddress.ip_network(text, strict=False))
+    except ValueError:
+        raise ValueError(
+            f"{name} must be an address or a network, like 192.168.50.122, "
+            "192.168.50.0/24 or 192.168.50."
+        ) from None
+
+
+@lru_cache(maxsize=65_536)
+def _in_network(address: str | None, network: str) -> int:
+    """1 when ``address`` (as stored: IPv6 may be written out in full) is in
+    ``network``: SQLite's in_network() for the address filters."""
+    if not address:
+        return 0
+    try:
+        return int(ipaddress.ip_address(address) in ipaddress.ip_network(network))
+    except ValueError:
+        return 0
+
+
+def _connect_filtering(db_path: Path | str) -> sqlite3.Connection:
+    connection = _connect(db_path)
+    connection.create_function("in_network", 2, _in_network, deterministic=True)
+    return connection
+
+
+def _filter_sql(chosen: AlertFilter, engines: Sequence[str]) -> tuple[str, dict[str, Any]]:
+    """The WHERE clause that takes the alerts ``chosen`` takes (all but
+    ``last``), and its parameters; on a _connect_filtering connection."""
+    conditions: list[str] = []
+    parameters: dict[str, Any] = {}
+
+    def any_of(expression: str, key: str, values: Sequence[Any]) -> None:
+        names = {f"{key}{index}": value for index, value in enumerate(values)}
+        conditions.append(f"{expression} IN ({', '.join(f':{name}' for name in names)})")
+        parameters.update(names)
+
+    if chosen.engine:
+        any_of("engine", "engine", [chosen.engine])
+    elif set(engines) != set(KNOWN_ENGINES):
+        # Only this machine's engines. With every engine there is nothing to
+        # leave out, and the condition would lead SQLite to read the alerts
+        # one by one through the engine index instead of a filter's own.
+        any_of("engine", "engine", list(engines))
+    if chosen.since_ms is not None:
+        conditions.append("event_ts_utc >= :since")
+        parameters["since"] = int(chosen.since_ms)
+    if chosen.until_ms is not None:
+        conditions.append("event_ts_utc <= :until")
+        parameters["until"] = int(chosen.until_ms)
+    if chosen.search.strip():
+        conditions.append(f"instr(lower({_SEARCHED}), :search) > 0")
+        parameters["search"] = chosen.search.strip().lower()
+    if chosen.severities:
+        any_of(_SEVERITY, "severity", sorted({int(level) for level in chosen.severities}))
+    for column, value in (
+        ("protocol", chosen.protocol),
+        ("classification", chosen.classification),
+        ("service", chosen.service),
+    ):
+        if value.strip():
+            conditions.append(f"lower({column}) = :{column}")
+            parameters[column] = value.strip().lower()
+    for column, value in zip(("gid", "sid", "rev"), chosen.rule or ()):
+        if value is not None:
+            conditions.append(f"{column} = :rule_{column}")
+            parameters[f"rule_{column}"] = value
+    for column, value in (("src_addr", chosen.source), ("dst_addr", chosen.destination)):
+        if value:
+            conditions.append(f"in_network({column}, :{column})")
+            parameters[column] = value
+    if chosen.port is not None:
+        conditions.append("(src_port = :port OR dst_port = :port)")
+        parameters["port"] = int(chosen.port)
+    if chosen.label:
+        # Stored as the engine wrote it: IPv6 may be written out in full.
+        spellings = sorted(
+            {spelling for address in _lab_attacker_ips() for spelling in _spellings(address)}
+        )
+        names = {f"attacker{index}": spelling for index, spelling in enumerate(spellings)}
+        listed = ", ".join(f":{name}" for name in names)
+        attack = f"(src_addr IN ({listed}) OR dst_addr IN ({listed}))" if names else "0"
+        conditions.append(attack if chosen.label == "attack" else f"NOT COALESCE({attack}, 0)")
+        parameters.update(names)
+    return (f"WHERE {' AND '.join(conditions)}" if conditions else ""), parameters
+
+
+def _spellings(address: str) -> set[str]:
+    """The ways the engines write an address: as given, short, and IPv6 in full."""
+    found = {address}
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return found
+    found.add(str(parsed))
+    if parsed.version == 6:
+        found.add(parsed.exploded)
+    return found
+
+
 def alerts(
     db_path: Path | str,
     *,
@@ -356,54 +544,55 @@ def alerts(
     page: int = 1,
     page_size: int = 25,
     engines: Sequence[str] = ENGINES,
+    filters: AlertFilter | None = None,
 ) -> dict[str, Any]:
     """One page of stored alerts of the ``engines``, newest first, with how
-    many match.
+    many there are (``total``) and how many match before ``last`` keeps the
+    newest (``matching``).
 
-    ``engine`` limits the list to one engine, ``since_ms`` to alerts from
-    then on, and ``search`` to alerts whose message, rule, class, protocol,
-    service, endpoints or PKT time contain it (any case). A page past the
-    last is the last page. Each row names its packet (``packet``: the
-    lowest id of the alerts on it, the same in every list) and says whether
-    both engines alerted on it (``both``), matched as in the combined
-    export. A page's rows are grouped by packet: the packets in the order of
-    their newest row, each packet's rows together, Snort's first.
+    ``filters`` chooses the alerts (AlertFilter); without it ``engine``
+    limits the list to one engine, ``since_ms`` to alerts from then on, and
+    ``search`` to alerts whose message, rule, class, protocol, service,
+    endpoints or PKT time contain it (any case). A page past the last is the
+    last page. Each row names its packet (``packet``: the UID of the first
+    stored alert on it, the same in every list) and says whether both
+    engines alerted on it (``both``), matched as in the combined export. A
+    page's rows are grouped by packet: the packets in the order of their
+    newest row, each packet's rows together, Snort's first.
     """
-    conditions, parameters = [], {}
-    if engine:
-        conditions.append("engine = :engine")
-        parameters["engine"] = engine
-    else:
-        names = {f"engine{index}": name for index, name in enumerate(engines)}
-        conditions.append(f"engine IN ({', '.join(f':{key}' for key in names)})")
-        parameters.update(names)
-    if since_ms is not None:
-        conditions.append("event_ts_utc >= :since")
-        parameters["since"] = int(since_ms)
-    if search.strip():
-        conditions.append(f"instr(lower({_SEARCHED}), :search) > 0")
-        parameters["search"] = search.strip().lower()
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    chosen = filters if filters is not None else AlertFilter(
+        engine=engine, since_ms=since_ms, search=search,
+    )
+    where, parameters = _filter_sql(chosen, engines)
     page_size = max(1, int(page_size))
-    with closing(_connect(db_path)) as connection:
-        total = connection.execute(
+    with closing(_connect_filtering(db_path)) as connection:
+        matching = connection.execute(
             f"SELECT COUNT(*) FROM alerts {where}", parameters
         ).fetchone()[0]
+        total = matching if chosen.last is None else min(matching, chosen.last)
         pages = max(1, math.ceil(total / page_size))
         page = min(max(1, int(page)), pages)
+        offset = (page - 1) * page_size
         rows = connection.execute(
             f"""
-            SELECT id, engine, event_ts_utc, gid, sid, rev, msg, classification,
-                   COALESCE(severity, priority), protocol, service,
-                   src_addr, src_port, dst_addr, dst_port
+            SELECT {_LISTED}
             FROM alerts
             {where}
             ORDER BY event_ts_utc DESC, id DESC
             LIMIT :limit OFFSET :offset
             """,
-            {**parameters, "limit": page_size, "offset": (page - 1) * page_size},
+            # The last page of "last N" stops at the Nth.
+            {**parameters, "limit": max(0, min(page_size, total - offset)), "offset": offset},
         ).fetchall()
         packets = _alert_packets(connection, rows, engines)
+        # A packet is named by its first stored alert's UID, which may be
+        # another engine's alert, not on this page.
+        uids = {row[0]: row[15] for row in rows}
+        named = sorted({packet for packet, _ in packets.values()} - uids.keys())
+        if named:
+            uids.update(connection.execute(
+                f"SELECT id, uid FROM alerts WHERE id IN ({', '.join('?' for _ in named)})", named
+            ).fetchall())
     # Each packet's rows together, where its first row stands.
     first_row: dict[Any, int] = {}
     for index, row in enumerate(rows):
@@ -419,35 +608,72 @@ def alerts(
     )
     return {
         "total": total,
+        "matching": matching,
         "page": page,
         "pages": pages,
         "page_size": page_size,
         "rows": [
-            {
-                "id": record_id,
-                "engine": row_engine,
-                "time_ms": event_ts_utc,
-                "rule": rule_name(gid, sid),
-                "gid": gid,
-                "sid": sid,
-                "rev": rev,
-                "message": str(message or "").strip(),
-                "class": _known(classification),
-                # 1 is the most severe, 4 the least.
-                "severity": max(1, min(4, int(severity))) if severity is not None else 4,
-                "protocol": protocol,
-                "service": _known(service),
-                "src": _endpoint(src_addr, src_port),
-                "dst": _endpoint(dst_addr, dst_port),
-                "packet": packets.get(record_id, (record_id, False))[0],
-                "both": packets.get(record_id, (record_id, False))[1],
-            }
-            for (
-                record_id, row_engine, event_ts_utc, gid, sid, rev, message, classification,
-                severity, protocol, service, src_addr, src_port, dst_addr, dst_port,
-            ) in rows
+            _listed(
+                row,
+                uids.get(packets.get(row[0], (row[0], False))[0]),
+                packets.get(row[0], (row[0], False))[1],
+            )
+            for row in rows
         ],
     }
+
+
+# The columns of an alert as the lists show it (_listed).
+_LISTED = (
+    "id, engine, event_ts_utc, gid, sid, rev, msg, classification, "
+    "COALESCE(severity, priority), protocol, service, "
+    "src_addr, src_port, dst_addr, dst_port, uid"
+)
+
+
+def _listed(row: Sequence[Any], packet_uid: Any, both: bool) -> dict[str, Any]:
+    """One alert as the lists show it, from its _LISTED columns, its
+    packet's UID and whether both engines alerted on that packet."""
+    (
+        record_id, engine, event_ts_utc, gid, sid, rev, message, classification,
+        severity, protocol, service, src_addr, src_port, dst_addr, dst_port, uid,
+    ) = row
+    return {
+        "id": record_id,
+        "engine": engine,
+        "time_ms": event_ts_utc,
+        "rule": rule_name(gid, sid),
+        "gid": gid,
+        "sid": sid,
+        "rev": rev,
+        "message": str(message or "").strip(),
+        "class": _known(classification),
+        # 1 is the most severe, 4 the least.
+        "severity": max(1, min(4, int(severity))) if severity is not None else 4,
+        "protocol": protocol,
+        "service": _known(service),
+        "src": _endpoint(src_addr, src_port),
+        "dst": _endpoint(dst_addr, dst_port),
+        "uid": uid_text(uid),
+        "packet": uid_text(packet_uid),
+        "both": both,
+        # From or to a lab attacker (config/lab_phases.json), or not.
+        "label": "attack" if {_address_text(src_addr), _address_text(dst_addr)} & _attackers() else "background",
+    }
+
+
+def _address_text(address: Any) -> str | None:
+    """One spelling per address (IPv6 short), to compare."""
+    if not address:
+        return None
+    try:
+        return str(ipaddress.ip_address(str(address)))
+    except ValueError:
+        return str(address)
+
+
+def _attackers() -> set[str]:
+    return {spelling for spelling in map(_address_text, _lab_attacker_ips()) if spelling}
 
 
 def rule_pairs(db_path: Path | str, *, engines: Sequence[str] = ENGINES) -> dict[str, Any]:
@@ -756,6 +982,7 @@ def combined_export(
         window_end=end,
         length_label=length_label,
         rule_intelligence=rule_intelligence,
+        lab_attackers=_lab_attacker_ips(),
     )
     packets = document.get("packets", [])
     return {
@@ -766,4 +993,266 @@ def combined_export(
         "both_engine_packets": sum(
             "snort" in packet and "suricata" in packet for packet in packets
         ),
+    }
+
+
+def filter_values(db_path: Path | str, *, engines: Sequence[str] = ENGINES) -> dict[str, list[str]]:
+    """The protocols, classes and services the stored alerts of the
+    ``engines`` have, the most common first: the Alert Explorer's filter
+    choices."""
+    with closing(_connect(db_path)) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT protocol, classification, service, COUNT(*) FROM alerts
+            WHERE engine IN ({", ".join("?" for _ in engines)})
+            GROUP BY protocol, classification, service
+            """,
+            tuple(engines),
+        ).fetchall()
+    found: dict[str, Counter[str]] = {"protocols": Counter(), "classes": Counter(), "services": Counter()}
+    for protocol, classification, service, number in rows:
+        for key, value in (("protocols", protocol), ("classes", classification), ("services", service)):
+            if _known(value) is not None:
+                found[key][str(value)] += number
+    return {key: [value for value, _ in values.most_common()] for key, values in found.items()}
+
+
+def _cut(
+    db_path: Path | str, chosen: AlertFilter, engines: Sequence[str],
+) -> tuple[AlertFilter, int | None]:
+    """``chosen`` up to the latest complete time when it takes more than one
+    engine's alerts (see complete_window_end), and that time; one engine's
+    alerts need no waiting for the other's (None)."""
+    taken = [chosen.engine] if chosen.engine else list(engines)
+    if len(taken) < 2:
+        return chosen, None
+    complete = complete_window_end(newest_event_times(db_path, taken))
+    if complete is None:
+        return chosen, None
+    complete_ms = _ms(complete)
+    until = complete_ms if chosen.until_ms is None else min(chosen.until_ms, complete_ms)
+    return replace(chosen, until_ms=until), complete_ms
+
+
+def _selection_groups(chosen: AlertFilter, engines: Sequence[str]) -> list[AlertFilter]:
+    """``chosen`` as filters whose newest ``last`` are taken one by one:
+    one per engine for the last N of each."""
+    if chosen.last is not None and chosen.each and not chosen.engine:
+        return [replace(chosen, engine=engine) for engine in engines]
+    return [chosen]
+
+
+def _selection_counts(
+    connection: sqlite3.Connection, chosen: AlertFilter, engines: Sequence[str],
+) -> dict[str, tuple[int, int, int]]:
+    """For each engine, how many alerts ``chosen`` takes, and the first and
+    last one's time."""
+    counts = {}
+    for group in _selection_groups(chosen, engines):
+        where, parameters = _filter_sql(group, engines)
+        # Sorted only to keep the newest: counting needs no order.
+        limit = "ORDER BY event_ts_utc DESC, id DESC LIMIT :last" if group.last is not None else ""
+        for engine, number, first, last in connection.execute(
+            f"""
+            SELECT engine, COUNT(*), MIN(event_ts_utc), MAX(event_ts_utc) FROM (
+                SELECT engine, event_ts_utc FROM alerts {where} {limit}
+            ) GROUP BY engine
+            """,
+            {**parameters, "last": group.last},
+        ):
+            counts[engine] = (number, first, last)
+    return counts
+
+
+def _selected_rows(
+    connection: sqlite3.Connection, chosen: AlertFilter, engines: Sequence[str],
+) -> list[dict[str, Any]]:
+    """The alerts ``chosen`` takes, as an export reads them, oldest first."""
+    found: dict[int, dict[str, Any]] = {}
+    for group in _selection_groups(chosen, engines):
+        where, parameters = _filter_sql(group, engines)
+        limit = "LIMIT :last" if group.last is not None else ""
+        for row in connection.execute(
+            f"""
+            SELECT {", ".join(EXPORT_FIELDS)} FROM alerts {where}
+            ORDER BY event_ts_utc DESC, id DESC {limit}
+            """,
+            {**parameters, "last": group.last},
+        ):
+            alert = dict(zip(EXPORT_FIELDS, row))
+            found[alert["id"]] = alert
+    return sorted(found.values(), key=lambda alert: (alert["event_ts_utc"] or 0, alert["id"]))
+
+
+def selection(
+    db_path: Path | str,
+    chosen: AlertFilter,
+    *,
+    engines: Sequence[str] = ENGINES,
+    max_alerts: int = EXPORT_MAX_ALERTS,
+) -> dict[str, Any]:
+    """What a download or send of the alerts ``chosen`` takes would hold,
+    before it is built: how many alerts of each engine (``alerts``; an
+    engine with none left out) and in all, the first and last one's time
+    (null without alerts), the latest complete time it stops at with more
+    than one engine (``complete_end_ms``, else null), and the most one file
+    holds."""
+    cut, complete_ms = _cut(db_path, chosen, engines)
+    with closing(_connect_filtering(db_path)) as connection:
+        counts = _selection_counts(connection, cut, engines)
+    return {
+        "alerts": {engine: counts[engine][0] for engine in engines if engine in counts},
+        "total": sum(number for number, _, _ in counts.values()),
+        "first_ms": min((first for _, first, _ in counts.values()), default=None),
+        "last_ms": max((last for _, _, last in counts.values()), default=None),
+        "complete_end_ms": complete_ms,
+        "max_alerts": max_alerts,
+    }
+
+
+def _span_label(span_ms: int) -> str:
+    """A window's length in words: its WINDOW_LENGTHS name when it has one."""
+    seconds = max(0, round(span_ms / 1000))
+    for label, length in WINDOW_LENGTHS.items():
+        if length.total_seconds() == seconds:
+            return label
+    for unit, size, below in (("second", 1, 120), ("minute", 60, 7_200), ("hour", 3_600, 172_800)):
+        if seconds < below:
+            break
+    else:
+        unit, size = "day", 86_400
+    number = round(seconds / size)
+    return f"{number} {unit}{'' if number == 1 else 's'}"
+
+
+def selection_export(
+    db_path: Path | str,
+    chosen: AlertFilter,
+    *,
+    rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None]
+    | None = offline_rule_intelligence,
+    engines: Sequence[str] = ENGINES,
+    max_alerts: int = EXPORT_MAX_ALERTS,
+) -> dict[str, Any] | None:
+    """The combined JSON (see docs/combined-json-format.md) of the alerts
+    ``chosen`` takes, as the Alert Explorer's lists show them (from the
+    database): its file name and text, its window and the counts the screen
+    shows. None when no alert matches. Its window is the time range chosen,
+    up to the latest complete time with more than one engine, or with
+    ``last`` or no range the alerts' own span, in whole seconds. More than
+    ``max_alerts`` raises TooManyAlerts before it is built."""
+    cut, _ = _cut(db_path, chosen, engines)
+    with closing(_connect_filtering(db_path)) as connection:
+        total = sum(number for number, _, _ in _selection_counts(connection, cut, engines).values())
+        if total > max_alerts:
+            raise TooManyAlerts(total, max_alerts)
+        rows = _selected_rows(connection, cut, engines)
+    if not rows:
+        return None
+    ranged = cut.last is None
+    start_ms = cut.since_ms if ranged and cut.since_ms is not None else rows[0]["event_ts_utc"]
+    end_ms = cut.until_ms if ranged and cut.until_ms is not None else rows[-1]["event_ts_utc"]
+    start_ms = start_ms // 1000 * 1000
+    end_ms = -(-end_ms // 1000) * 1000
+    label = _span_label(end_ms - start_ms)
+    start, end = _moment(start_ms), _moment(end_ms)
+    # The rows are the chosen ones already: none is left out for its time.
+    document = build_combined_detections(
+        rows,
+        window_start=start,
+        window_end=end,
+        length_label=label,
+        rule_intelligence=rule_intelligence,
+        lab_attackers=_lab_attacker_ips(),
+        trim_to_window=False,
+    )
+    taken = [chosen.engine] if chosen.engine else list(engines)
+    slug = (
+        f"last{chosen.last}{'each' if len(_selection_groups(chosen, engines)) > 1 else ''}"
+        if chosen.last is not None
+        else re.sub(r"[^0-9a-z]+", "", label.lower().replace("minutes", "min"))
+    )
+    packets = document.get("packets", [])
+    return {
+        "filename": f"{'_'.join(taken)}_combined_{start:%Y%m%d_%H%M}_{slug}.json",
+        "json": serialize_combined_detections(document),
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "alerts": document.get("alerts", {}),
+        "packets": len(packets),
+        "both_engine_packets": sum(
+            "snort" in packet and "suricata" in packet for packet in packets
+        ),
+    }
+
+
+def alert_detail(
+    db_path: Path | str,
+    alert_id: int,
+    *,
+    rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None]
+    | None = offline_rule_intelligence,
+    engines: Sequence[str] = ENGINES,
+) -> dict[str, Any] | None:
+    """Everything about one stored alert, for the Alert Explorer's side
+    panel; None when no alert of the ``engines`` has that id. ``alert`` is
+    the alert as the lists show it, ``same_packet`` the other alerts on its
+    packet (both engines'), and ``rules``, ``cves``, ``attack_techniques``,
+    ``flows`` and ``packets`` what the combined JSON gives for that one
+    packet (see docs/combined-json-format.md): each rule with its text and
+    enrichment, and each engine's own output."""
+    with closing(_connect(db_path)) as connection:
+        found = connection.execute(
+            "SELECT event_ts_utc, engine FROM alerts WHERE id = ?", (int(alert_id),)
+        ).fetchone()
+        if found is None or found[1] not in engines:
+            return None
+        time_ms = found[0]
+        near = [
+            dict(zip(EXPORT_FIELDS, row))
+            for row in connection.execute(
+                f"SELECT {', '.join(EXPORT_FIELDS)} FROM alerts WHERE "
+                + ("event_ts_utc BETWEEN ? AND ?" if time_ms is not None else "id = ?"),
+                (time_ms - 1, time_ms + 1) if time_ms is not None else (int(alert_id),),
+            )
+            if row[1] in engines
+        ]
+        packets = alert_packets(near)
+        packet, both = packets.get(alert_id, (alert_id, False))
+        together = sorted(
+            {alert_id, packet, *(other for other, (name, _) in packets.items() if name == packet)}
+        )
+        listed = {
+            row[0]: row
+            for row in connection.execute(
+                f"SELECT {_LISTED} FROM alerts WHERE id IN ({', '.join('?' for _ in together)})",
+                together,
+            )
+        }
+    packet_uid = listed[packet][15] if packet in listed else listed[alert_id][15]
+    rows = sorted(
+        (row for row in near if row["id"] in listed),
+        key=lambda row: (row["event_ts_utc"] or 0, row["id"]),
+    )
+    moment = _moment(time_ms if time_ms is not None else 0)
+    document = build_combined_detections(
+        rows,
+        window_start=moment,
+        window_end=moment,
+        rule_intelligence=rule_intelligence,
+        lab_attackers=_lab_attacker_ips(),
+        trim_to_window=False,
+    )
+    return {
+        "alert": _listed(listed[alert_id], packet_uid, both),
+        "same_packet": [
+            _listed(listed[other], packet_uid, both)
+            for other in together
+            if other != alert_id and other in listed
+        ],
+        **{
+            key: document[key]
+            for key in ("rules", "cves", "attack_techniques", "flows", "packets")
+            if key in document
+        },
     }

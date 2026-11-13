@@ -86,10 +86,17 @@ network interface (afpacket)
   - the last 24 hours, or a live chart of the last 15 minutes, with the
     times the machine was off shaded;
   - the top rules.
-- **Alert Explorer:** every stored alert, searchable, the combined JSON
-  for a chosen time window
-  ([docs/combined-json-format.md](docs/combined-json-format.md)), and the
-  old alerts' zips to download.
+- **Alert Explorer:** every stored alert, grouped by packet (each alert has
+  a 7-character UID from its minute and its number in that minute, and a
+  packet is named by its first alert's), newest first, with filters for the
+  time (the last 5 minutes to 30 days), engine, severity, protocol, class,
+  service, rule, addresses and port, and "Show the newest" 5, 10, 20 or any
+  number. A click on an alert shows all of it: its rule's text, why it
+  fired, and the other alerts on its packet. What the filters choose can be
+  downloaded as combined JSON
+  ([docs/combined-json-format.md](docs/combined-json-format.md)) or sent to
+  the LLM PC (`IDS_LLM_URL` in `.env`); the old alerts' zips are at the
+  bottom.
 
 ## What is where
 
@@ -200,6 +207,21 @@ Neither rule set is in this repository; each comes from its maker.
   rule counts and rule index. `IDS_LOCAL_RULES` in `.env` is empty on a
   machine without them. Edit the file and run it again to change them.
 
+- **Keeping them up to date:** a timer fetches Suricata's rules every night
+  and Snort's every week, checks them and loads them (`deploy/update-rules.sh`).
+  It asks once for the oinkcode, which only root can read afterwards:
+
+  ```bash
+  sudo deploy/install-rule-updates.sh
+  ```
+
+- **This lab's Suricata settings** (alert payloads as text, pcap files of the
+  alerted flows, the Conficker P2P rules off, logs closed to other users):
+
+  ```bash
+  sudo deploy/apply-suricata-settings.sh
+  ```
+
 ### 3. Let the collector read the logs
 
 The engines write their logs as root, and the collector runs as your user.
@@ -304,8 +326,9 @@ instead. When the archive can't be written (a full disk, say), the alerts
 stay in the database, past its limit, until it can.
 
 The Alert Explorer lists the zips and day files under "Old alerts", to
-download from any computer, and a combined export of an older window takes
-its alerts from the archive. One export holds at most
+download from any computer. Its download holds the alerts in the database
+that its filters choose; the API's export of a whole older window
+(`GET /export`) takes its alerts from the archive. One export holds at most
 `IDS_EXPORT_MAX_ALERTS` alerts (150,000), as building one takes about 8 KB
 of memory an alert.
 

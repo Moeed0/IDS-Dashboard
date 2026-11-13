@@ -110,3 +110,17 @@ def test_the_basic_local_rules_are_the_same_text_for_both_engines():
     assert all('msg:"LOCAL ' in line for line in rules)
     for modifier in ("nocase", "distance", "within", "depth", "offset"):
         assert not any(f" {modifier}" in line or f";{modifier}" in line for line in rules), modifier
+
+
+def test_send_goes_to_the_llm_pc_set_in_the_settings(monkeypatch):
+    from ids.config import llm_target
+
+    monkeypatch.setenv("IDS_LLM_URL", "")
+    monkeypatch.setenv("IDS_LLM_TOKEN", "")
+    assert llm_target() == (None, None)
+    monkeypatch.setenv("IDS_LLM_URL", " http://192.168.50.20:8000/ids ")
+    monkeypatch.setenv("IDS_LLM_TOKEN", "secret")
+    assert llm_target() == ("http://192.168.50.20:8000/ids", "secret")
+    monkeypatch.setenv("IDS_LLM_URL", "192.168.50.20:8000")
+    with pytest.raises(ValueError, match="IDS_LLM_URL must start with http:// or https://"):
+        llm_target()

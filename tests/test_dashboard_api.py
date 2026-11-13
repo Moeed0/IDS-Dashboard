@@ -4,6 +4,7 @@ import re
 import sqlite3
 import stat
 import time
+import urllib.error
 from datetime import datetime
 from urllib.parse import urlencode
 
@@ -11,6 +12,7 @@ import pytest
 
 from dashboard_api import create_app, new_token, save_new_token
 from ids.combined_detections import PKT
+from ids.uids import assign_uids
 from ids.config import api_token_required
 from ids.dashboard_data import alerts, overview
 
@@ -28,13 +30,15 @@ def _database(path, rows):
         "event_ts_utc INTEGER, gid INTEGER, sid INTEGER, rev INTEGER, msg TEXT, "
         "classification TEXT, severity INTEGER, priority INTEGER, protocol TEXT, "
         "service TEXT, src_addr TEXT, src_port INTEGER, dst_addr TEXT, "
-        "dst_port INTEGER, rule_key TEXT, raw_json TEXT)"
+        "dst_port INTEGER, rule_key TEXT, raw_json TEXT, uid INTEGER)"
     )
     connection.executemany(
         "INSERT INTO alerts (engine, event_ts_utc, gid, sid, msg, severity, raw_json) "
         "VALUES (?, ?, ?, ?, ?, 3, '{}')",
         rows,
     )
+    # Each alert's UID, as the collector gives it.
+    assign_uids(connection)
     connection.commit()
     connection.close()
 
@@ -59,14 +63,15 @@ def _app(db_path, web_dist=None):
     )
 
 
-def _get(app, path, token=TOKEN, **query):
-    """One GET request through the ASGI app: status, headers and body."""
+def _get(app, path, token=TOKEN, method="GET", **query):
+    """One request (GET unless ``method`` says) through the ASGI app:
+    status, headers and body."""
     headers = [(b"host", b"testserver")]
     if token:
         headers.append((b"authorization", f"Bearer {token}".encode()))
     scope = {
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-        "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(),
+        "method": method, "scheme": "http", "path": path, "raw_path": path.encode(),
         "query_string": urlencode(query).encode(), "root_path": "",
         "headers": headers, "client": ("127.0.0.1", 50000), "server": ("testserver", 80),
     }
@@ -94,11 +99,13 @@ def test_every_endpoint_but_health_needs_the_token(db_path):
     assert _get(app, "/health", token=None)[0] == 200
     for path in (
         "/options", "/overview", "/status", "/live", "/alerts", "/rule-pairs", "/export/window", "/export",
+        "/alerts/values", "/export/selection", "/export/selection/file",
     ):
         status, headers, body = _get(app, path, token=None)
         assert (status, json.loads(body)) == (401, {"error": "missing or wrong token"})
         assert headers["www-authenticate"] == "Bearer"
         assert _get(app, path, token="wrong")[0] == 401
+    assert _get(app, "/export/selection/send", token=None, method="POST")[0] == 401
     with pytest.raises(ValueError):
         create_app(db_path=db_path, ids_sources={}, token="")
 
@@ -205,8 +212,17 @@ def test_alert_list_parameters_are_checked(db_path):
     assert error(page="two") == "page must be a whole number"
     assert error(page_size="1000") == "page_size must be from 1 to 250"
     assert error(range="Last week") == (
-        "range must be one of: Last 24 hours, Last 7 days, Last 30 days, All stored"
+        "range must be one of: Last 5 minutes, Last 10 minutes, Last 15 minutes, "
+        "Last 30 minutes, Last hour, Last 24 hours, Last 7 days, Last 30 days, All stored"
     )
+    assert error(severity="5") == "severity must be numbers from 1 to 4, like 1,2"
+    assert error(rule="ET 1") == "rule must be a SID, GID:SID or GID:SID:Rev, like 2001119 or 116:444"
+    assert error(source="router") == (
+        "source must be an address or a network, like 192.168.50.122, 192.168.50.0/24 or 192.168.50."
+    )
+    assert error(last="0") == "last must be from 1 to 150000"
+    assert error(port="70000") == "port must be from 0 to 65535"
+    assert error(label="attacks") == "label must be attack or background"
     assert error(range="All stored", since_ms="1") == "give range or since_ms, not both"
     rows = json.loads(_get(app, "/alerts", range="All stored", search="padding")[2])["rows"]
     assert [row["rule"] for row in rows] == ["2200007"]
@@ -418,3 +434,114 @@ def test_a_damaged_database_says_how_to_restore(tmp_path):
     assert "scripts/restore_backup.py" in json.loads(body)["error"]
     # A missing file isn't damage.
     assert "restore" not in json.loads(_get(_app(tmp_path / "missing.db"), "/overview")[2])["error"]
+
+
+def test_the_alert_list_takes_every_filter(db_path):
+    app = _app(db_path)
+
+    def rules(**query):
+        status, _, body = _get(app, "/alerts", **query)
+        assert status == 200
+        return [row["rule"] for row in json.loads(body)["rows"]]
+
+    assert rules(rule="116:444") == ["116:444"]
+    assert rules(severity="3,4") == ["2200007", "116:444", "2001119"]
+    assert rules(severity="1") == []
+    assert rules(last="2") == ["2200007", "116:444"]
+    assert rules(until_ms=str(_ms(2026, 11, 3, 12, 39))) == ["2001119"]
+    page = json.loads(_get(app, "/alerts", last="2", page_size="1")[2])
+    assert (page["total"], page["matching"], page["pages"]) == (2, 3, 2)
+    status, _, body = _get(app, "/alerts/values")
+    assert (status, json.loads(body)) == (200, {"protocols": [], "classes": [], "services": []})
+    # One alert, for the side panel.
+    status, _, body = _get(app, "/alerts/2")
+    detail = json.loads(body)
+    assert (status, detail["alert"]["rule"], detail["same_packet"]) == (200, "116:444", [])
+    assert len(detail["packets"]) == 1
+    status, _, body = _get(app, "/alerts/99")
+    assert (status, json.loads(body)) == (404, {"error": "no such alert"})
+
+
+def test_the_filtered_download_and_what_it_would_hold(db_path):
+    app = _app(db_path)
+
+    status, _, body = _get(app, "/export/selection", engine="suricata", last="1")
+    assert (status, json.loads(body)) == (200, {
+        "alerts": {"suricata": 1}, "total": 1,
+        "first_ms": _ms(2026, 11, 3, 12, 40, 8), "last_ms": _ms(2026, 11, 3, 12, 40, 8),
+        "complete_end_ms": None, "max_alerts": 150_000,
+    })
+
+    status, headers, body = _get(app, "/export/selection/file", engine="suricata", last="1")
+    assert status == 200
+    assert headers["content-disposition"] == (
+        'attachment; filename="suricata_combined_20261103_1240_last1.json"'
+    )
+    assert (headers["x-alerts-snort"], headers["x-alerts-suricata"]) == ("0", "1")
+    assert json.loads(body)["alerts"] == {"suricata": 1}
+    status, _, body = _get(app, "/export/selection/file", severity="1")
+    assert (status, json.loads(body)) == (404, {"error": "no alerts match the filters"})
+
+
+def _sending_app(db_path, sender, url="http://192.168.50.20:8000/ids"):
+    return create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        send_url=url, send_token="llm-token", sender=sender,
+    )
+
+
+def test_send_posts_the_chosen_alerts_to_the_llm_pc(db_path):
+    sent = []
+
+    def sender(url, body, headers):
+        sent.append((url, json.loads(body), dict(headers)))
+        return 200, "taken"
+
+    app = _sending_app(db_path, sender)
+
+    assert json.loads(_get(app, "/options")[2])["send_to"] == "192.168.50.20:8000"
+    status, _, body = _get(app, "/export/selection/send", method="POST", engine="suricata", last="1")
+    answer = json.loads(body)
+    assert status == 200
+    assert answer == {
+        "sent": True, "to": "192.168.50.20:8000",
+        "filename": "suricata_combined_20261103_1240_last1.json", "bytes": answer["bytes"],
+        "alerts": {"suricata": 1}, "packets": 1, "both_engine_packets": 0,
+    }
+    [(url, document, headers)] = sent
+    assert url == "http://192.168.50.20:8000/ids"
+    assert document["alerts"] == {"suricata": 1}
+    assert headers["Authorization"] == "Bearer llm-token"
+    assert headers["X-Filename"] == answer["filename"]
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    # Only a POST sends.
+    assert _get(app, "/export/selection/send", engine="suricata")[0] == 405
+    assert len(sent) == 1
+
+
+def test_send_says_why_nothing_was_sent(db_path):
+    off = _app(db_path)
+    assert json.loads(_get(off, "/options")[2])["send_to"] is None
+    status, _, body = _get(off, "/export/selection/send", method="POST")
+    assert (status, json.loads(body)["error"]) == (
+        503,
+        "Send is off: put the LLM PC's address in IDS_LLM_URL in .env and restart the dashboard",
+    )
+
+    def unreachable(url, body, headers):
+        raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    status, _, body = _get(
+        _sending_app(db_path, unreachable, "http://llm-pc:8000/"), "/export/selection/send",
+        method="POST", engine="suricata",
+    )
+    assert status == 502
+    assert json.loads(body)["error"].startswith("could not reach the LLM PC at llm-pc:8000:")
+
+    status, _, body = _get(
+        _sending_app(db_path, lambda url, body, headers: (500, "model not loaded\n")),
+        "/export/selection/send", method="POST", engine="suricata",
+    )
+    assert (status, json.loads(body)["error"]) == (
+        502, "the LLM PC at 192.168.50.20:8000 answered 500: model not loaded",
+    )

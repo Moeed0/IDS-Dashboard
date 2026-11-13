@@ -1,0 +1,22 @@
+# Fetches and loads each engine's newest rules (deploy/update-rules.sh),
+# started by ids-rule-update.timer. deploy/install-rule-updates.sh fills in
+# @REPO_DIR@ and installs it in /etc/systemd/system. It runs as root: it
+# installs rules and restarts the engines.
+[Unit]
+Description=IDS rule update (Suricata nightly, Snort weekly)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Run late after a boot (Persistent=true catches up a missed night at once):
+# until 15 minutes after boot, so it doesn't meet Snort and Suricata loading
+# their rules, the collector catching up and the desktop starting, all on the
+# same slow disk. At the nightly time the VM has been up longer: no wait.
+# ($$ is a $ for the shell; systemd would read a single one itself.)
+ExecStartPre=/bin/sh -c 'up=$$(cut -d. -f1 /proc/uptime); [ "$$up" -ge 900 ] || sleep $$((900 - up))'
+TimeoutStartSec=infinity
+ExecStart=@REPO_DIR@/deploy/update-rules.sh
+# Behind the engines and the collector for CPU and disk.
+Nice=10
+IOSchedulingClass=idle

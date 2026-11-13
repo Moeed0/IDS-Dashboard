@@ -77,11 +77,17 @@ def build_tailers(
     }
 
 
+def uid_mark(settings: Settings) -> Path:
+    """The last alert UID given (ids/uids.py), beside the collector's state,
+    where a restored backup of the database can't take it back."""
+    return settings.state_file.with_name("last_uid")
+
+
 def setup_database(settings: Settings) -> None:
     conn = connect_database(settings.db_file)
 
     try:
-        ensure_schema(conn)
+        ensure_schema(conn, uid_mark(settings))
         conn.commit()
     finally:
         conn.close()
@@ -107,6 +113,7 @@ def flush_pending(
             insert_alert_batch(
                 conn,
                 pending.rows,
+                uid_mark(settings),
             )
 
 

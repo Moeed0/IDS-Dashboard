@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertExplorer } from "./AlertExplorer";
 import { Overview } from "./Overview";
-import { StatusPanel } from "./StatusPanel";
+import { StatusNote, StatusPanel, StatusStrip } from "./StatusPanel";
 import { Unauthorized, engineNames, errorText, getJson, setToken, useApi, type Options, type Status } from "./api";
 import type { SearchRequest } from "./AlertExplorer";
 
@@ -81,7 +81,9 @@ export default function App() {
   );
 }
 
-/** The screen with the status panel beside it; both show what /status says. */
+/** The screen: the Overview with the status strip over it and the panel
+ * beside it, and the Alert Explorer over the whole width, where only a
+ * problem is said (in a line over it). All show what /status says. */
 function Screens({
   page,
   options,
@@ -97,16 +99,22 @@ function Screens({
 }) {
   const status = useApi<Status>("/status", {}, onUnauthorized, 10_000);
   return (
-    <div className="layout">
+    <div className={page === "overview" ? "layout" : "layout whole"}>
       <main>
         {page === "overview" && (
-          <Overview options={options} status={status} onUnauthorized={onUnauthorized} onSearch={onSearch} />
+          <>
+            <StatusStrip status={status} />
+            <Overview options={options} onUnauthorized={onUnauthorized} onSearch={onSearch} />
+          </>
         )}
         {page === "alerts" && (
-          <AlertExplorer options={options} onUnauthorized={onUnauthorized} searchRequest={searchRequest} />
+          <>
+            <StatusNote status={status} />
+            <AlertExplorer options={options} onUnauthorized={onUnauthorized} searchRequest={searchRequest} />
+          </>
         )}
       </main>
-      <StatusPanel status={status} />
+      {page === "overview" && <StatusPanel status={status} />}
     </div>
   );
 }

@@ -1,8 +1,9 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 9.2)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 9.3)
 
-Built in **Alert Explorer → Export Combined Snort + Suricata JSON** for one time
-window (5 minutes to 7 days). The file is meant for analysis and LLM training.
-It is a timeline of the packets the two engines alerted on, oldest first:
+Built in the **Alert Explorer** from the alerts its filters choose ("Download
+JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
+minutes to 7 days). The file is meant for analysis and LLM training. It is a
+timeline of the packets the two engines alerted on, oldest first:
 
 - a packet only Snort alerted on shows only Snort's part;
 - a packet only Suricata alerted on shows only Suricata's part;
@@ -10,7 +11,10 @@ It is a timeline of the packets the two engines alerted on, oldest first:
   packet is (time, protocol, addresses, ports) is written once.
 
 Every alert in the window is kept with the IDS's own output, and values that
-carry no information are left out. Nothing is written twice (9.0):
+carry no information are left out. A file built from the Alert Explorer's
+filters holds only the alerts they choose (a rule, a severity, an address,
+the newest 20, …): its window then says when, and other alerts of that time
+are not in it. Nothing is written twice (9.0):
 
 - what is the same for every alert of a rule is given once in `rules`;
 - what is the same for every alert of an engine on one connection is given
@@ -33,7 +37,7 @@ in every file.
 
 | Key | Meaning |
 |---|---|
-| `window` | Start, end and length of the time window. Times are PKT (`+05:00`). The window ends where both engines' alerts are stored at the latest (see Window end). |
+| `window` | Start, end and length of the time window. Times are PKT (`+05:00`). The window ends where both engines' alerts are stored at the latest (see Window end). A file of the Alert Explorer's filters has the time range chosen, or with the newest N alerts (or no range) their own span in whole seconds (`"length": "104 seconds"`). |
 | `alerts` | How many alerts each engine raised in the window; an engine that raised none is left out (`{"snort": 3}`). |
 | `rules` | Each rule that fired in the window, once: its IDS output fields and its enrichment. |
 | `cves` | Each CVE a rule names, once: NVD summary, CVSS, EPSS and CISA KEV. |
@@ -72,6 +76,10 @@ entry in `packets` is one such packet:
 - `packet` — its number, counted from 1 in time order across the file.
 - `time` — when the packet was stamped; when both engines alerted on it, the
   earlier of their two stamps.
+- `label` (9.3) — `lab attack` when the packet came from or went to a lab
+  attacker (an `attacker_ip` of `config/lab_phases.json`), `background` for
+  every other packet: what the alerts were raised on, for training and for
+  checking a model. Left out of every packet when no attacker is listed.
 - `protocol` — the packet's protocol. Snort calls IGMP `IP`, so a packet only
   Snort alerted on can say `IP`. Left out when no engine names one (Suricata's
   unknown-Ethertype events).
@@ -265,7 +273,13 @@ named by its rules only.
   reference lists, and the vulnerability type "N/A".
 
 Kept as traffic evidence: the HTTP request path, HTTP headers such as an attack
-payload, host and query names.
+payload, host and query names, and (9.3) what the packet carried as text:
+Suricata's `payload_printable` and `http.http_request_body_printable` /
+`http_response_body_printable` (on since 12 November 2026), and Snort's
+`b64_data` given the same way, as `payload_printable` (printable ASCII, tabs
+and line breaks kept, any other byte a dot). Suricata's Base64 `payload` and
+`packet` are left out, as is Snort's `b64_data` itself: so Snort's record
+rebuilds with `payload_printable` in place of `b64_data`.
 
 ## What can still look repeated
 

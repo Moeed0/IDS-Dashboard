@@ -123,7 +123,7 @@ if [[ "$ENGINES" == *" snort "* ]]; then
     fi
 
     echo "== Snort: checking its config (this loads all its rules)"
-    if ! sudo snort -c "$config" -T > /tmp/snort-local-rules-test.log 2>&1 \
+    if ! sudo snort -c "$config" --plugin-path /usr/local/lib/snort/so_rules -T > /tmp/snort-local-rules-test.log 2>&1 \
         || ! grep -q "successfully validated" /tmp/snort-local-rules-test.log; then
         echo "!! Snort's config doesn't load; putting the old files back." >&2
         echo "   Full output: /tmp/snort-local-rules-test.log" >&2

@@ -109,10 +109,12 @@ tr.shaded td {
   background: var(--shade);
 }
 
+/* The packet's ID: 7 characters, in a fixed-width font so they line up. */
 .packet {
   min-width: calc(7ch + 16px);
   color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 0.92em;
 }
 
 /* Severity as three circles, filled as the alert is more severe. */
@@ -241,6 +243,11 @@ code {
   padding: 0 16px 24px;
 }
 
+/* The Alert Explorer takes the whole width: it has no status panel. */
+.layout.whole {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 main {
   min-width: 0;
 }
@@ -259,7 +266,7 @@ main {
   }
 }
 
-/* Status panel: whether the IDS stores alerts now */
+/* Status panel: what is stored, the drops, the disk and HOME_NET */
 .status-panel {
   position: sticky;
   top: 10px;
@@ -275,11 +282,69 @@ main {
   line-height: 1.35;
 }
 
-.status-head {
+/* The top of the Overview: the status, then each engine and the collector,
+   as cells of one card, with a thin line between them however they wrap. */
+.status-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 1px;
+  margin: 14px 0 8px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.strip-cell {
+  padding: 10px 14px;
+  background: var(--surface);
+}
+
+.strip-name {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.strip-value {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+.strip-value.quiet {
+  color: var(--warning-border);
+}
+
+.strip-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The status cell says it in colour: green while live. */
+.status-strip.ok .overall {
+  background: color-mix(in srgb, var(--ok) 9%, var(--surface));
+}
+
+.status-strip.ok .overall .strip-value {
+  color: var(--ok);
+}
+
+.status-strip.warn .overall {
+  background: var(--warning-surface);
+}
+
+.status-strip.down .overall {
+  background: color-mix(in srgb, var(--error) 12%, var(--surface));
+}
+
+.status-strip.down .overall .strip-value {
+  color: var(--error);
 }
 
 .status-dot {
@@ -290,25 +355,17 @@ main {
   background: var(--muted);
 }
 
-.status-panel.ok .status-dot {
+.status-strip.ok .status-dot {
   background: var(--ok);
   animation: live 2s ease-out infinite;
 }
 
-.status-panel.warn .status-dot {
+.status-strip.warn .status-dot {
   background: var(--warning-border);
 }
 
-.status-panel.down .status-dot {
+.status-strip.down .status-dot {
   background: var(--error);
-}
-
-.status-panel.ok .status-head strong {
-  color: var(--ok);
-}
-
-.status-panel.down .status-head strong {
-  color: var(--error);
 }
 
 @keyframes live {
@@ -322,15 +379,9 @@ main {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-panel.ok .status-dot {
+  .status-strip.ok .status-dot {
     animation: none;
   }
-}
-
-.status-detail {
-  margin: 0;
-  color: var(--muted);
-  white-space: pre-line;
 }
 
 .status-name {
@@ -340,6 +391,7 @@ main {
 .status-item .muted {
   font-size: 12px;
 }
+
 
 nav {
   display: flex;
@@ -578,21 +630,17 @@ td.message {
 }
 
 .pager {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.pager label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
-.pager input {
-  width: 72px;
+.pager button {
+  padding: 2px 10px;
+}
+
+.pager .muted {
+  margin-right: 4px;
 }
 
 .token {
@@ -673,4 +721,340 @@ td.message {
   padding: 6px 10px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* The Alert Explorer's two toolbars: the main filters with the list layout
+   at the end, then "Show the newest" with the download and Send at the end,
+   and a line under them that keeps the controls apart from the lists. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.toolbar.show {
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar.show > button {
+  padding: 4px 10px;
+}
+
+.toolbar input.count {
+  width: 9em;
+}
+
+.toolbar-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* A filter that is set stands out from the ones left open. */
+select.set,
+input.set {
+  border-color: var(--accent);
+}
+
+/* Severity: one button for each level's circles, outlined when chosen. */
+.chips {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.chip {
+  padding: 6px 9px;
+}
+
+.chip.on {
+  border-color: var(--accent);
+  background: var(--shade);
+}
+
+/* Side by side or combined lists: two joined buttons. */
+.view button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.view button:last-child {
+  border-radius: 0 6px 6px 0;
+  margin-left: -9px;
+}
+
+.toolbar .outcome {
+  max-width: 24em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A list's name and count, with its paging on the same line. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.panel-head h3 {
+  margin: 0;
+}
+
+/* The alert lists: a row opens its alert in the side panel; the headings
+   stay in view while the list is scrolled; a row that has just come in
+   lights up for a moment. */
+.panel .table-wrap {
+  overflow: clip;
+}
+
+.panel thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.panel thead th:first-child {
+  border-top-left-radius: 8px;
+}
+
+.panel thead th:last-child {
+  border-top-right-radius: 8px;
+}
+
+.panel tbody tr {
+  cursor: pointer;
+}
+
+.panel tbody tr:hover td,
+.panel tbody tr:focus-visible td {
+  background: var(--grid);
+}
+
+.panel tbody tr.opened td {
+  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+
+.panel tbody tr.fresh td {
+  animation: arrived 2.5s ease-out;
+}
+
+@keyframes arrived {
+  from {
+    background: var(--warning-surface);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel tbody tr.fresh td {
+    animation: none;
+  }
+}
+
+/* A narrow screen scrolls a wide list sideways instead. */
+@media (max-width: 1000px) {
+  .panel .table-wrap {
+    overflow-x: auto;
+  }
+}
+
+/* Top rules: a bar behind each count, in its engine's colour. */
+td.bar {
+  min-width: 96px;
+  background: linear-gradient(to right, var(--bar) var(--share), transparent var(--share));
+}
+
+td.bar.snort {
+  --bar: color-mix(in srgb, var(--snort) 28%, transparent);
+}
+
+td.bar.suricata {
+  --bar: color-mix(in srgb, var(--suricata) 28%, transparent);
+}
+
+/* One alert, whole, down the right side of the Alert Explorer. */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: min(560px, 100vw);
+  overflow-y: auto;
+  padding: 14px 16px 24px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawer h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.drawer h3 {
+  margin: 18px 0 6px;
+}
+
+.drawer h4 {
+  margin: 10px 0 2px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.drawer p,
+.drawer ul {
+  margin: 4px 0;
+}
+
+.drawer ul {
+  padding-left: 18px;
+}
+
+.drawer .mates {
+  padding-left: 0;
+  list-style: none;
+}
+
+.drawer pre {
+  margin: 4px 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.drawer pre.rule-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 12px 0 0;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A lab attack's alerts: a small tag before the message. */
+.tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: 1px;
+}
+
+.tag.attack {
+  color: var(--severe);
+  background: color-mix(in srgb, var(--severe) 14%, transparent);
+}
+
+/* A section that shows only its heading until it is opened. */
+.fold-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 20px 0 8px;
+}
+
+.fold-head button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+.fold-head .chevron {
+  color: var(--muted);
+  width: 1em;
+}
+
+/* The row of filters fits on one line of a laptop's screen, and its boxes
+   keep their width: a long class chosen ends in "…" (whole on hover)
+   instead of pushing Destination and Port onto the next line. */
+.filters.compact {
+  gap: 6px;
+}
+
+.filters.compact fieldset {
+  column-gap: 6px;
+}
+
+.filters.compact fieldset .choice {
+  gap: 3px;
+}
+
+.filters.compact .levels {
+  gap: 2px;
+}
+
+.filters.compact .levels i {
+  width: 7px;
+  height: 7px;
+}
+
+.filters.compact input[type="checkbox"] {
+  margin: 0;
+}
+
+.filters select.choices {
+  width: 5em;
+  text-overflow: ellipsis;
+}
+
+.filters select.choices.wide {
+  width: 7.5em;
+}
+
+.filters input.rule {
+  width: 6em;
+}
+
+.filters input.address {
+  width: 8em;
+}
+
+.filters input.port {
+  width: 4.5em;
+}
+
+.sent {
+  color: var(--ok);
 }

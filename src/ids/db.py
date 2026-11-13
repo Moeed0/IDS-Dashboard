@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
+from ids.uids import assign_uids
+
 
 def canonical_json(value: Any) -> str:
     return json.dumps(
@@ -93,7 +95,11 @@ def _restore_sudo_user_ownership(db_path: Path) -> None:
 def insert_alert_batch(
     conn: sqlite3.Connection,
     rows: Iterable[dict[str, Any]],
+    uid_mark: Path | None = None,
 ) -> int:
+    """Stores the alerts the database doesn't have yet (by event_hash) and
+    gives them their UIDs (ids/uids.py, ``uid_mark`` its mark file); how
+    many it stored."""
     rows = list(rows)
 
     if not rows:
@@ -205,6 +211,8 @@ def insert_alert_batch(
     )
 
     inserted = conn.total_changes - before
+    # The new alerts' UIDs; the duplicates skipped above take no number.
+    assign_uids(conn, uid_mark)
     conn.commit()
 
     return inserted

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timedelta
@@ -7,7 +8,24 @@ from datetime import datetime, timedelta
 import pytest
 
 from ids.combined_detections import PKT
-from ids.dashboard_data import alerts, combined_export, export_window, live, overview, rule_pairs, status
+from ids.uids import assign_uids
+from ids.alert_archive import TooManyAlerts
+from ids.dashboard_data import (
+    AlertFilter,
+    alert_detail,
+    alerts,
+    combined_export,
+    export_window,
+    filter_values,
+    live,
+    overview,
+    parse_network,
+    parse_rule,
+    rule_pairs,
+    selection,
+    selection_export,
+    status,
+)
 
 
 def _ms(*parts):
@@ -21,7 +39,7 @@ def _database(path, alerts):
         "event_ts_utc INTEGER, gid INTEGER, sid INTEGER, rev INTEGER, msg TEXT, "
         "classification TEXT, severity INTEGER, priority INTEGER, protocol TEXT, "
         "service TEXT, src_addr TEXT, src_port INTEGER, dst_addr TEXT, "
-        "dst_port INTEGER, rule_key TEXT, raw_json TEXT)"
+        "dst_port INTEGER, rule_key TEXT, raw_json TEXT, uid INTEGER)"
     )
     connection.executemany(
         "INSERT INTO alerts (engine, event_ts_utc, gid, sid, rev, msg, classification, "
@@ -38,6 +56,8 @@ def _database(path, alerts):
             for alert in alerts
         ],
     )
+    # Each alert's UID, as the collector gives it.
+    assign_uids(connection)
     connection.commit()
     connection.close()
 
@@ -296,8 +316,13 @@ def test_alert_list_pages_newest_first(tmp_path):
         # IPv6 in its short form, with brackets before the port.
         "src": "[fe80::2d37:6cf4:f5c8:64f7]:5353",
         "dst": "[ff02::fb]:5353",
-        "packet": 3,
+        # Its UID: minute 3,340 (3 Nov, 07:40 UTC) times 16,384, the
+        # minute's first alert. Its packet is named by its first alert's:
+        # this one.
+        "uid": "01M6000",
+        "packet": "01M6000",
         "both": False,
+        "label": "background",
     }
     # "none" and "unknown" say nothing; an address without a port is alone.
     assert (snort["class"], snort["service"], snort["src"]) == (None, None, "192.168.50.122")
@@ -322,6 +347,158 @@ def test_alert_list_filters_by_engine_time_and_search(tmp_path):
     assert rules(search="12:40:08") == ["2030387"]
     assert rules(search="100%") == []
     assert alerts(db_path, search="nothing like this")["pages"] == 1
+
+
+def test_alert_list_filters_by_severity_protocol_class_service_rule_addresses_and_port(tmp_path):
+    db_path = _alert_list_database(tmp_path)
+
+    def rules(**chosen):
+        return [row["rule"] for row in alerts(db_path, filters=AlertFilter(**chosen))["rows"]]
+
+    assert rules(severities=(1,)) == ["2030387"]
+    assert rules(severities=(1, 3)) == ["2030387", "116:444", "2001119"]
+    # In any case.
+    assert rules(protocol="udp") == ["2030387", "2001119"]
+    assert rules(classification="not suspicious traffic") == ["2001119"]
+    assert rules(service="DNS") == ["2001119"]
+    assert rules(rule=parse_rule("116:444")) == ["116:444"]
+    assert rules(rule=parse_rule("2001119")) == ["2001119"]
+    assert rules(rule=parse_rule("1:2001119:2")) == []
+    assert rules(source=parse_network("192.168.50.122")) == ["116:444"]
+    assert rules(source=parse_network("192.168.50.")) == ["116:444", "2001119"]
+    # An IPv6 address stored written out in full is in its network.
+    assert rules(source=parse_network("fe80::/10")) == ["2030387"]
+    assert rules(destination=parse_network("ff02::fb")) == ["2030387"]
+    # Either side's port.
+    assert rules(port=53) == ["2001119"]
+    assert rules(port=5353) == ["2030387"]
+    assert rules(until_ms=_ms(2026, 11, 3, 12, 39, 49)) == ["116:444", "2001119"]
+    assert rules(engine="suricata", severities=(3,)) == ["2001119"]
+
+
+def test_alerts_from_or_to_a_lab_attacker_are_labelled_and_filtered(tmp_path, monkeypatch):
+    import ids.dashboard_data as dashboard_data
+
+    phases = tmp_path / "lab_phases.json"
+    phases.write_text(json.dumps({"1": {"attacker_ip": "192.168.50.122"}}))
+    monkeypatch.setattr(dashboard_data, "LAB_PHASES_FILE", phases)
+    db_path = _alert_list_database(tmp_path)
+
+    labels = {row["rule"]: row["label"] for row in alerts(db_path)["rows"]}
+    # Snort's alert from 192.168.50.122, and Suricata's DNS answer to it.
+    assert labels == {"116:444": "attack", "2001119": "attack", "2030387": "background"}
+    assert [row["rule"] for row in alerts(db_path, filters=AlertFilter(label="attack"))["rows"]] == [
+        "116:444", "2001119",
+    ]
+    assert [row["rule"] for row in alerts(db_path, filters=AlertFilter(label="background"))["rows"]] == [
+        "2030387",
+    ]
+    # Every packet of the file says so, from the engines' own addresses: the
+    # DNS answer to 192.168.50.122, and the ARP check without any.
+    packet_db = tmp_path / "packets.db"
+    _database(packet_db, _one_packet_alerts())
+    built = selection_export(packet_db, AlertFilter(engine="snort"), rule_intelligence=None)
+    assert [packet["label"] for packet in json.loads(built["json"])["packets"]] == ["lab attack", "background"]
+    # No attackers known: nothing is a lab attack.
+    phases.write_text("{}")
+    assert alerts(db_path, filters=AlertFilter(label="attack"))["total"] == 0
+    assert alerts(db_path, filters=AlertFilter(label="background"))["total"] == 3
+
+
+def test_last_n_takes_the_newest_and_its_pages_stop_there(tmp_path):
+    db_path = _alert_list_database(tmp_path)
+
+    def page(number):
+        return alerts(db_path, filters=AlertFilter(last=2), page=number, page_size=1)
+
+    assert (page(1)["total"], page(1)["matching"], page(1)["pages"]) == (2, 3, 2)
+    assert [row["rule"] for row in page(1)["rows"]] == ["2030387"]
+    assert [row["rule"] for row in page(2)["rows"]] == ["116:444"]
+    # Past the last page: the last page, which still stops at the second.
+    assert [row["rule"] for row in page(5)["rows"]] == ["116:444"]
+    assert alerts(db_path, filters=AlertFilter(last=10))["total"] == 3
+
+
+def test_the_rule_and_address_filters_say_what_they_take():
+    assert parse_rule(" ") is None
+    assert parse_rule("1:2001119:6") == (1, 2001119, 6)
+    with pytest.raises(ValueError, match="^rule must be a SID, GID:SID or GID:SID:Rev"):
+        parse_rule("ET 2001119")
+    assert parse_network("") == ""
+    assert parse_network("10.") == "10.0.0.0/8"
+    assert parse_network("192.168.50.*") == "192.168.50.0/24"
+    assert parse_network(" 192.168.50.7/24 ") == "192.168.50.0/24"
+    assert parse_network("fe80::1") == "fe80::1/128"
+    with pytest.raises(ValueError, match="^source must be an address or a network"):
+        parse_network("router", "source")
+
+
+def test_the_filters_offer_the_stored_protocols_classes_and_services(tmp_path):
+    db_path = _alert_list_database(tmp_path)
+
+    # The most common first; "none" and "unknown" say nothing.
+    assert filter_values(db_path) == {
+        "protocols": ["UDP", "IP"], "classes": ["Not Suspicious Traffic"], "services": ["dns"],
+    }
+
+
+def _timeline_database(tmp_path):
+    """Snort's alerts at 12:00:01, :02 and :03, Suricata's at 12:00:01.5,
+    :02.5 and :04: both engines are stored up to 12:00:02."""
+    db_path = tmp_path / "ids_live.db"
+    _database(db_path, [
+        *(_alert("snort", _ms(2026, 11, 3, 12, 0, second), *IPV4_OPTION) for second in (1, 2, 3)),
+        *(
+            _alert("suricata", _ms(2026, 11, 3, 12, 0, second, micro), *PADDING)
+            for second, micro in ((1, 500_000), (2, 500_000), (4, 0))
+        ),
+    ])
+    return db_path
+
+
+def test_a_selection_of_both_engines_stops_at_the_latest_complete_time(tmp_path):
+    db_path = _timeline_database(tmp_path)
+    complete = _ms(2026, 11, 3, 12, 0, 2)
+
+    assert selection(db_path, AlertFilter()) == {
+        "alerts": {"snort": 2, "suricata": 1}, "total": 3,
+        "first_ms": _ms(2026, 11, 3, 12, 0, 1), "last_ms": complete,
+        "complete_end_ms": complete, "max_alerts": 150_000,
+    }
+    # The newest of each engine, or the newest two together.
+    assert selection(db_path, AlertFilter(last=1, each=True))["alerts"] == {"snort": 1, "suricata": 1}
+    assert selection(db_path, AlertFilter(last=2))["first_ms"] == _ms(2026, 11, 3, 12, 0, 1, 500_000)
+    # One engine's alerts need no waiting for the other's.
+    snort = selection(db_path, AlertFilter(engine="snort"))
+    assert (snort["alerts"], snort["last_ms"], snort["complete_end_ms"]) == (
+        {"snort": 3}, _ms(2026, 11, 3, 12, 0, 3), None,
+    )
+    assert selection(db_path, AlertFilter(severities=(1,)))["total"] == 0
+
+
+def test_the_download_holds_the_chosen_alerts_and_their_span(tmp_path):
+    db_path = _timeline_database(tmp_path)
+
+    built = selection_export(db_path, AlertFilter(last=1, each=True), rule_intelligence=None)
+
+    assert built["filename"] == "snort_suricata_combined_20261103_1200_last1each.json"
+    assert built["alerts"] == {"snort": 1, "suricata": 1}
+    assert (built["start_ms"], built["end_ms"]) == (_ms(2026, 11, 3, 12, 0, 1), _ms(2026, 11, 3, 12, 0, 2))
+    document = json.loads(built["json"])
+    assert document["alerts"] == built["alerts"]
+    assert document["window"] == {
+        "start": "2026-11-03T12:00:01+05:00", "end": "2026-11-03T12:00:02+05:00", "length": "1 second",
+    }
+    # A time range is the window, to the newest alert with one engine.
+    ranged = selection_export(
+        db_path, AlertFilter(engine="snort", since_ms=_ms(2026, 11, 3, 12)), rule_intelligence=None,
+    )
+    assert ranged["filename"] == "snort_combined_20261103_1200_3seconds.json"
+    assert json.loads(ranged["json"])["window"]["length"] == "3 seconds"
+    assert ranged["alerts"] == {"snort": 3}
+    assert selection_export(db_path, AlertFilter(severities=(1,)), rule_intelligence=None) is None
+    with pytest.raises(TooManyAlerts):
+        selection_export(db_path, AlertFilter(engine="snort"), rule_intelligence=None, max_alerts=2)
 
 
 DNS_SPOOF = "PROTOCOL-DNS SPOOF query response with TTL of 1 min. and no authority"
@@ -370,18 +547,41 @@ def test_alert_list_names_each_packet_and_keeps_its_rows_together(tmp_path):
 
     rows = alerts(db_path)["rows"]
 
-    # The DNS answer's two alerts share a packet, named by the lower id, and
-    # sit together, Snort's first; the ARP alert is a packet of its own.
+    # The DNS answer's two alerts share a packet, named by the UID of the
+    # first stored, and sit together, Snort's first; the ARP alert is a
+    # packet of its own.
     by_rule = {(row["engine"], row["sid"]): row["packet"] for row in rows}
-    assert by_rule[("snort", 254)] == by_rule[("suricata", 2001119)] == min(
-        row["id"] for row in rows if row["sid"] in (254, 2001119)
-    )
+    first = min((row for row in rows if row["sid"] in (254, 2001119)), key=lambda row: row["id"])
+    assert by_rule[("snort", 254)] == by_rule[("suricata", 2001119)] == first["uid"]
+    assert re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{7}", first["uid"])
     assert by_rule[("snort", 1)] not in (by_rule[("snort", 254)],)
     shared = [index for index, row in enumerate(rows) if row["packet"] == by_rule[("snort", 254)]]
     assert shared[1] - shared[0] == 1
     assert [rows[index]["engine"] for index in shared] == ["snort", "suricata"]
     # Each engine's own list gives the packet the same name.
     assert alerts(db_path, engine="suricata")["rows"][0]["packet"] == by_rule[("snort", 254)]
+
+
+def test_one_alert_comes_with_its_packet_as_the_combined_json_gives_it(tmp_path):
+    db_path = tmp_path / "ids_live.db"
+    _database(db_path, _one_packet_alerts())
+
+    detail = alert_detail(db_path, 2, rule_intelligence=None)
+
+    alert = detail["alert"]
+    assert (alert["engine"], alert["sid"], alert["both"]) == ("suricata", 2001119, True)
+    # Snort's alert on the same packet, whose UID names the packet.
+    assert [(row["engine"], row["sid"]) for row in detail["same_packet"]] == [("snort", 254)]
+    assert alert["packet"] == detail["same_packet"][0]["uid"]
+    # One packet, with both engines' parts.
+    [packet] = detail["packets"]
+    assert "snort" in packet and "suricata" in packet
+    # The ARP alert is alone on its packet.
+    arp = alert_detail(db_path, 3, rule_intelligence=None)
+    assert (arp["alert"]["both"], arp["same_packet"], len(arp["packets"])) == (False, [], 1)
+    assert alert_detail(db_path, 99, rule_intelligence=None) is None
+    # Not an engine this machine runs.
+    assert alert_detail(db_path, 1, rule_intelligence=None, engines=("suricata",)) is None
 
 
 def test_rule_pairs_are_the_last_hours_rules_on_one_packet(tmp_path):

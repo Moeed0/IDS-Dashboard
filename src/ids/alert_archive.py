@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from zoneinfo import ZoneInfo
 
+from ids.uids import uid_text
+
 # Days run in the dashboard's time zone.
 PKT = ZoneInfo("Asia/Karachi")
 DAY_FOLDER = "days"
@@ -157,6 +159,9 @@ def _append_by_day(
     try:
         for row in rows:
             alert = dict(zip(names, row))
+            # The UID as the page shows it, not its number.
+            if "uid" in alert:
+                alert["uid"] = uid_text(alert["uid"])
             name = f"{_day(alert.get('event_ts_utc'), today)}{DAY_SUFFIX}"
 
             if name not in files:

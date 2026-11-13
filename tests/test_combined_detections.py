@@ -717,7 +717,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "rules",
         "packets",
     ]
-    assert document["schema_version"] == "9.2"
+    assert document["schema_version"] == "9.3"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -1690,3 +1690,12 @@ def test_what_different_alerts_on_one_packet_share_is_given_once_with_the_packet
         json.dumps(ids_output("suricata", json.loads(row["raw_json"])), sort_keys=True)
         for row in rows
     )
+
+
+def test_snorts_payload_is_written_as_text_as_suricatas_is():
+    from ids.combined_detections import ids_output, printable_payload
+
+    assert printable_payload("R0VUIC8gSFRUUC8xLjENCgD/") == "GET / HTTP/1.1\r\n.."
+    assert printable_payload("not base64!") == ""
+    output = ids_output("snort", {"msg": "x", "b64_data": "R0VUIC8="})
+    assert output == {"msg": "x", "payload_printable": "GET /"}

@@ -105,7 +105,10 @@ js_norm = default_js_norm
 appid =
 {
     -- appid requires this to use appids in rules
-    --app_detector_dir = 'directory to load appid detectors from'
+    -- Talos's free OpenAppID detectors (the odp folder in it), which
+    -- deploy/update-rules.sh installs: they name each flow's application,
+    -- for the app-detect rules and the alerts' app_id.
+    app_detector_dir = '/usr/local/lib/openappid'
 }
 
 --[[
@@ -201,10 +204,16 @@ ips =
     -- note that rules files can include other rules files
     -- (see also related path vars at the top of snort_defaults.lua)
 
+    -- so_rules: Talos's shared-object rules from the same package. Their
+    -- texts are here; the compiled rules are in /usr/local/lib/snort/so_rules
+    -- (deploy/update-rules.sh copies them there), which Snort must be started
+    -- with: --plugin-path /usr/local/lib/snort/so_rules. A $VARIABLE can't
+    -- name the folder: they come from snort_defaults.lua.
     -- local.rules: the basic rules Snort and Suricata share
     -- (deploy/rules/local.rules, installed by deploy/install-local-rules.sh).
     rules = [[
         include $RULE_PATH/includes.rules
+        include /home/moeed824/snort-registered-test/so_rules/includes.rules
         include /usr/local/etc/snort/local.rules
     ]],
     variables = default_variables
@@ -268,10 +277,12 @@ rate_filter =
 -- you can enable with defaults from the command line with -A <alert_type>
 -- uncomment below to set non-default configs
 --alert_csv = { }
+-- b64_data: the packet's payload (Base64), which the dashboard shows as
+-- text, as Suricata's payload_printable (added 12 Nov 2026).
 alert_json =
 {
     file = true,
-    fields = 'timestamp pkt_num proto pkt_gen pkt_len dir src_addr src_port dst_addr dst_port iface msg rule gid sid rev action class priority service app_id icmp_type icmp_code icmp_id icmp_seq tcp_flags tcp_seq tcp_ack tcp_win udp_len ip_id ip_len ttl tos eth_src eth_dst eth_type vlan flowstart_time server_pkts server_bytes client_pkts client_bytes'
+    fields = 'timestamp pkt_num proto pkt_gen pkt_len dir src_addr src_port dst_addr dst_port iface msg rule gid sid rev action class priority service app_id icmp_type icmp_code icmp_id icmp_seq tcp_flags tcp_seq tcp_ack tcp_win udp_len ip_id ip_len ttl tos eth_src eth_dst eth_type vlan flowstart_time server_pkts server_bytes client_pkts client_bytes b64_data'
 }
 --alert_fast = { }
 --alert_full = { }

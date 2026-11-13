@@ -695,6 +695,11 @@ def main() -> None:
             if not files:
                 print(f"No {engine} rules found at {rules}")
 
+            # Snort's shared-object (SO) rules: their texts sit beside its
+            # rules, in the package's so_rules folder (deploy/snort/snort.lua).
+            if engine == "snort" and rules.is_dir():
+                files += rule_files(rules.parent / "so_rules")
+
             # The local rules both engines load, kept apart from each
             # engine's own (deploy/rules/local.rules).
             local = Path(source.get("local_rules") or "")

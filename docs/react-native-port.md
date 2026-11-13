@@ -110,9 +110,14 @@ Until 5 November 2026 the rule counts and the engines' files were in
 | `GET /overview?step_minutes=&top_rules_length=` | `overview(db_path, ids_sources, alert_retention=…, step_minutes=…, top_rules_length=…)` | Overview screen data |
 | `GET /status` | `status(db_path, state_file)` | Whether the IDS stores alerts now, for the status panel |
 | `GET /live` | `live(db_path)` | The Overview's live chart: the last 15 minutes in 30-second steps |
-| `GET /alerts?engine=&range=&search=&page=&page_size=` | `alerts(db_path, …)` | One page of alerts, newest first |
+| `GET /alerts?<filters>&page=&page_size=` | `alerts(db_path, filters=AlertFilter(…), …)` | One page of alerts, newest first |
+| `GET /alerts/values` | `filter_values(db_path)` | The protocols, classes and services the filters offer |
+| `GET /alerts/{id}` | `alert_detail(db_path, id)` | One alert, whole, for the side panel |
 | `GET /rule-pairs` | `rule_pairs(db_path)` | The last hour's rules both engines fired on one packet, for the Alert Explorer |
-| `GET /export/window?length=&end_ms=` | `export_window(db_path, length, end_ms)` | Start and end of a combined export |
+| `GET /export/selection?<filters>` | `selection(db_path, AlertFilter(…))` | What a download or send of the filtered alerts would hold |
+| `GET /export/selection/file?<filters>` | `selection_export(db_path, AlertFilter(…))` | The combined JSON file of the filtered alerts |
+| `POST /export/selection/send?<filters>` | `selection_export(…)`, then a POST to `IDS_LLM_URL` | Sends that file to the LLM PC |
+| `GET /export/window?length=&end_ms=` | `export_window(db_path, length, end_ms)` | Start and end of a combined export of a whole window |
 | `GET /export?length=&end_ms=` | `combined_export(db_path, …)` | The combined JSON file for that window |
 | `GET /archive` | `archive_contents(archive_dir)` | The archive's zips and day files, for the Alert Explorer |
 | `GET /archive/{name}` | `archive_file(archive_dir, name)` | One of them, as a download (404 for any other name) |
@@ -123,9 +128,11 @@ Until 5 November 2026 the rule counts and the engines' files were in
 {"engines": ["snort", "suricata"],
  "export_lengths": ["5 minutes", "10 minutes", "15 minutes", "…", "7 days"],
  "default_export_length": "15 minutes",
- "time_ranges": [{"label": "Last 24 hours", "ms": 86400000}, "…",
+ "time_ranges": [{"label": "Last 5 minutes", "ms": 300000}, "…",
                  {"label": "All stored", "ms": null}],
  "page_sizes": [10, 25, 50, 100, 250],
+ "last_choices": [5, 10, 20], "max_last": 150000,
+ "send_to": "192.168.50.20:8000",
  "chart_steps": [5, 10, 15], "default_chart_step": 15,
  "live_step_seconds": 30,
  "default_top_rules_length": "1 day",
@@ -160,15 +167,13 @@ Until 5 November 2026 the rule counts and the engines' files were in
 
 What the screen shows:
 
-- **Status**: a tile for each engine with a green dot while it runs (red
-  when stopped, grey when that is not known; `running` from `/status`), how
-  long ago its newest alert was and its `rules`; then a Collector tile, its
-  dot and how long ago it last stored alerts (`collector_saved_ms`). The
-  tiles take these from `/status`, which comes every 10 seconds, and the
-  engines' from `engines` until it has come; the "ago" times count on
-  between answers, as in the status panel (below). What is stored and
-  HOME_NET are in the status panel. The Collector tile moved here from the
-  panel on 6 November 2026.
+- **Status**: one strip at the top, from `/status` (below): first the
+  status in colour (green "Live, storing alerts now", or what is wrong, as
+  the panel's summary says it), then a cell for each engine with a green dot
+  while it runs (red when stopped, grey when that is not known; `running`),
+  how long ago its newest alert was (amber after 30 minutes) and its
+  `rules`, then the collector, its dot and how long ago it last stored
+  alerts (`collector_saved_ms`; amber after 5 minutes).
 - **Warnings**: an engine with no `newest_ms`, or one more than 30 minutes
   old: "No Snort alert stored for 2 h. Check Snort and
   live_dual_collector.py." An engine with `unmatched_lab_attackers`: its
@@ -214,7 +219,8 @@ What the screen shows:
 - **Top rules** (`null` likewise): each engine's most frequent rules over the
   last `top_rules_length` (one of the export lengths, `1 day` when left out),
   as a list (rule as `gid:sid:rev`, alerts, message), one line a rule like
-  the Alert Explorer's; a rule that fired with two
+  the Alert Explorer's, with a bar behind each count in the engine's colour,
+  as long as its share of the busiest rule's; a rule that fired with two
   revisions has a row for each. `rule` is the SID with a GID other than 1
   first, as the combined export names rules.
 
@@ -260,8 +266,11 @@ The chart:
 
 ## Status panel
 
-`GET /status`, every 10 seconds, for a panel down the right side of every
-screen (above the screen on a narrow one):
+`GET /status`, every 10 seconds, for the Overview's status strip (above)
+and a panel down its right side (above the screen on a narrow one) with what
+is stored, the drops, the disk and HOME_NET. The Alert Explorer takes the
+whole width and has neither: there a warning line over the filters says what
+is wrong, and nothing while the IDS is live.
 
 ```json
 {"checked_ms": 1793792210825,
@@ -330,7 +339,7 @@ When the IDS machine or its API stops answering:
 
 ```json
 {
-  "total": 9924, "page": 1, "pages": 397, "page_size": 25,
+  "total": 9924, "matching": 9924, "page": 1, "pages": 397, "page_size": 25,
   "rows": [
     {"id": 229839, "engine": "snort", "time_ms": 1793694999066, "rule": "112:1",
      "gid": 112, "sid": 1, "rev": 1,
@@ -340,26 +349,62 @@ When the IDS machine or its API stops answering:
 }
 ```
 
+The filters (`<filters>`), the same for the list, the download and Send;
+each one left out takes every alert:
+
 - `engine` is `snort`, `suricata` or left out for both. The dashboard shows
   two lists side by side (one call per engine) or one combined list.
-- `range` is one of the time range labels; the API counts it back from its
-  own clock, which the stored times follow. `since_ms` (epoch ms) can be sent
-  instead; left out, the list has every stored alert.
-- `page` starts at 1; `page_size` is 1 to 250.
+- `range` is one of the time range labels (Last 5, 10, 15 or 30 minutes,
+  Last hour, Last 24 hours, Last 7 days, Last 30 days, All stored); the API
+  counts it back from its own clock, which the stored times follow.
+  `since_ms` (epoch ms) can be sent instead, and `until_ms` ends the range.
 - `search` matches the message, the rule as the screens show it
   (`116:444:1`), the class, protocol,
   service, either endpoint (`192.168.50.1:53`) or the PKT time
-  (`2026-11-03 12:40`), in any case. A page past the last returns the last
-  page.
+  (`2026-11-03 12:40`), in any case.
+- `severity` is one or more of 1 to 4 (`1,2`); `protocol` (`UDP`), `class`
+  (`Potentially Bad Traffic`) and `service` (`dns`) take that value in any
+  case, from the lists `GET /alerts/values` gives (the most common first;
+  "none" and "unknown" are left out).
+- `rule` is a SID (`2001119`), `gid:sid` (`116:444`) or `gid:sid:rev`.
+- `label` is `attack` for the alerts from or to a lab attacker (an
+  `attacker_ip` of `config/lab_phases.json`) and `background` for the others;
+  each row gives its own `label` too.
+- `source` and `destination` are an address (`192.168.50.122`, `fe80::1`), a
+  network (`192.168.50.0/24`) or an IPv4 address's first parts with a dot
+  (`192.168.50.`, the same /24); `port` is a port on either side.
+- `last` keeps only the newest that many (1 to `max_last`): `total` is then
+  at most `last`, `matching` how many match without it, and the pages stop
+  at the last of them. With `each=1` (download and send only) it is the
+  newest that many of each engine, as the side-by-side lists show them.
+- `page` starts at 1; `page_size` is 1 to 250. A page past the last returns
+  the last page. A filter the API can't read is 400 with what it takes, such
+  as `{"error": "source must be an address or a network, like
+  192.168.50.122, 192.168.50.0/24 or 192.168.50."}`.
 - `rule` is the SID, with the GID first when it is not 1; `gid`, `sid` and
   `rev` are the rule's numbers (`rev` is `null` when the engine gave none),
   which the screens show as `gid:sid:rev`. `severity` is 1
   (most severe) to 4. `src` and `dst` are `address:port`, `[IPv6]:port`, the
   address alone (no ports), or `null` (no IP addresses, such as ARP).
-- `packet` names the row's packet: the lowest `id` of the alerts on it, so
-  every alert on one packet has the same number, in each engine's list and
-  the combined one. It is worked out when the list is read, as `both` is,
-  and not stored. A page's rows are grouped by packet: the packets in the
+- `uid` is the alert's UID, 7 characters (`07ATG0K`), in Crockford's Base32
+  (digits and capitals without I, L, O and U, so the case doesn't matter
+  and UIDs sort by time). Each minute, counted from 1 Nov 2026 UTC, has
+  16,384 numbers, from minute × 16,384. The collector numbers the alerts as
+  it stores them, in time order: each new UID is the larger of its minute's
+  first number and the last UID given + 1, so a quiet minute's alerts get
+  its numbers in order, UIDs only go up, and none is given twice, even
+  after the archive or a restored backup (the last UID is also kept in
+  `.runtime/last_uid`). Past 16,384 alerts in a minute, the UIDs count on
+  into the next minutes' numbers until a quieter time catches up. Seven
+  characters last until late October 2030, and later UIDs take an eighth.
+  Unlike `id`, which a restored backup counts from again, it never names
+  two alerts. It is stored as its number, and the alert archive keeps its
+  characters.
+- `packet` names the row's packet: the `uid` of its first stored alert, so
+  every alert on one packet has the same packet ID, in each engine's list
+  and the combined one. It is worked out when the list is read, as `both`
+  is, and not stored (Snort and Suricata alerts aren't grouped in the
+  database). A page's rows are grouped by packet: the packets in the
   order of their newest row, each packet's rows together (Snort's first).
   The dashboard shows it as a Packet column and gives every other packet's
   rows a light shade, so the rows of one packet read as one; a packet keeps
@@ -371,19 +416,64 @@ When the IDS machine or its API stops answering:
 - `both` is `true` when both engines alerted on the row's packet, matched
   as for the Overview's "Both engines" among the alerts stored within a
   millisecond of it; always `false` with one engine.
-- Rows the dashboard shows: time, both (a ✓; with both engines only), rule
+- Rows the dashboard shows: time (the time of day, with the date only when
+  it is not today; the whole time on hover), both (a ✓; with both engines only), rule
   (`gid:sid:rev`, such as `1:2009206:4`; `gid:sid` without a revision),
   severity, message (side by side); time, engine, both, rule, severity,
   protocol, source, destination, message (combined). Page 1 is fetched
   again every 10 seconds; other pages stay as they are, so that their rows
-  don't move. The layout, time range and rows per page are kept in that
-  browser. Each row is one line, so that the
+  don't move. The page has no search or rows-per-page choice (it sends no
+  `search`, and 25 rows a page): every stored alert, newest first, unless
+  the filters or "Show the newest" narrow it. Two toolbars stand over the
+  lists. The first: time (Any time, or the last 5 minutes to 30 days),
+  engine, lab attacks or background (a lab attack's rows have a red "Lab
+  attack" tag before the message), severity as four buttons of circles, "More filters" (with how many
+  of its filters are set) and "Clear" while any filter is set, and the
+  "Side by side" / "Combined" buttons at its end. "More filters" opens a row
+  of the others: protocol, class, service, rule, source, destination, port
+  (the list boxes keep one width, a long class ending in "…"). A filter
+  that is set is outlined. The second: "Show the newest" 5, 10 or 20, or
+  any number typed in (none chosen shows every alert, and a chosen number
+  clicked again goes back to that), with "Download JSON" and "Send" at its
+  end. Each list's name and count stand on one line with its paging (the
+  rows shown, then newest «, newer ‹ and older ›). "Both engines: rule
+  pairs" and "Old alerts" show only their headings until opened. The
+  layout, the "More filters" row and the folds are kept as left in that
+  browser; the filters last while the page is open. Each row is one line,
+  so that the
   two lists side by side line up: a message too long for its column ends in
   "…" and shows whole on hover.
 
+### One alert, whole
+
+A row clicked (or Enter on it) opens a panel down the right side:
+`GET /alerts/{id}` (404 for an id no alert has).
+
+```json
+{"alert": {"id": 557556, "engine": "suricata", "…": "as a row of the list"},
+ "same_packet": [{"id": 557557, "…": "the other alerts on its packet"}],
+ "rules": {"suricata:2009205": {"why_triggered": "…", "rule_text": "…", "ids_output": {}}},
+ "packets": [{"packet": 1, "time": "…", "suricata": [{"rules": ["…"], "ids_output": {}}]}]}
+```
+
+- `alert` and `same_packet` are rows as the list gives them; `rules`, `cves`,
+  `attack_techniques`, `flows` and `packets` are what the combined JSON gives
+  for that one packet (docs/combined-json-format.md), each left out when
+  empty.
+- The panel shows the whole message, time, engine, rule (with a link that
+  puts it in the Rule filter), class, protocol and service, both endpoints,
+  the alert's and the packet's IDs; the other alerts on the packet, each a
+  link that opens it; the alert's rule (why it fired, its text, and the rest
+  under its own headings); the CVEs and techniques; and the packet's entry
+  as JSON. Esc or ✕ closes it; the row it shows is outlined.
+- In the lists the headings stay in view while the page is scrolled, and a
+  row that came in since the last answer lights up for a moment (page 1 of
+  an unchanged list only).
+
 ### Both engines: rule pairs
 
-Below the lists, with both engines, every 30 seconds: `GET /rule-pairs`.
+Below the lists, with both engines, folded: `GET /rule-pairs` every 30
+seconds while it is open.
 
 ```json
 {
@@ -405,15 +495,15 @@ Below the lists, with both engines, every 30 seconds: `GET /rule-pairs`.
 - The table shows each rule as `gid:sid:rev` with its message, then the
   packets.
 
-### Click to search
+### Click a rule
 
 A rule in the Overview's top rules or in the rule pairs is a link: it opens
 the Alert Explorer (or stays there) with the rule, as `gid:sid:rev`, in its
-search box. The time range and layout stay as they were.
+Rule filter. The other filters and the layout stay as they were.
 
 ### Old alerts
 
-Below the combined export: `GET /archive`, when the screen opens.
+At the bottom of the screen, folded: `GET /archive`, when it is opened.
 
 ```json
 {"zips": [{"name": "alerts_2026-11-03_to_2026-11-12.zip", "first_day": "2026-11-03",
@@ -435,10 +525,42 @@ Below the combined export: `GET /archive`, when the screen opens.
 
 ## Combined JSON export
 
-The section is headed "Download: combined JSON" and says that the file holds
-every alert in its own time window, whatever the list's time range and
-search are; the window reads "The file covers … → …", and the counts of a
-built file stand under "In this file".
+### Download or send what the filters choose
+
+"Download JSON" and "Send", at the end of the Show row, take the alerts
+the filters choose; only the outcome of a click is written out, and the
+buttons' hover text says what the file would hold (or why a button is off).
+With "the newest 20" side by side the file holds each engine's newest 20,
+in the combined layout the newest 20 of both together.
+
+1. `GET /export/selection?<filters>` (every 10 seconds) gives what the file
+   would hold: `{"alerts": {"snort": 20, "suricata": 20}, "total": 40,
+   "first_ms": …, "last_ms": …, "complete_end_ms": …, "max_alerts": 150000}`.
+   With both engines the alerts stop at the latest complete time
+   (`complete_end_ms`; see the window end in docs/combined-json-format.md),
+   so a packet both engines alerted on isn't shown as one engine's; one
+   engine's alerts need no wait (`null`).
+2. `GET /export/selection/file?<filters>` builds the file and returns it as
+   the body, with `Content-Disposition` (such as
+   `snort_suricata_combined_20261111_1630_last20each.json` or
+   `snort_combined_20261111_1200_24hours.json`) and the same `X-…` headers
+   as `/export`. Its window is the time range chosen, or with "newest N" or
+   no range the alerts' own span; it holds only the alerts the filters
+   choose, from the database. 404 when none match; 413 over `max_alerts`.
+3. `POST /export/selection/send?<filters>` builds the same file and POSTs it
+   to the LLM PC: to `IDS_LLM_URL` in .env (`http://` or `https://`), with
+   `Content-Type: application/json`, `X-Filename`, the `X-…` counts, and
+   `Authorization: Bearer <IDS_LLM_TOKEN>` when that is set. It answers
+   `{"sent": true, "to": "192.168.50.20:8000", "filename": …, "bytes": …,
+   "alerts": …, "packets": …, "both_engine_packets": …}`; 503 while
+   `IDS_LLM_URL` is empty (`send_to` in `/options` is then `null` and the
+   button is off), and 502 when the LLM PC can't be reached or answers
+   other than 2xx (it waits up to 60 seconds).
+
+### A whole time window
+
+These endpoints build the file for every alert of a time window, whatever
+the filters (the page no longer uses them):
 
 1. `GET /export/window?length=15 minutes` gives `start_ms`, `end_ms` and
    `complete_end_ms`, for the screen to show. With `end_ms` the user's chosen

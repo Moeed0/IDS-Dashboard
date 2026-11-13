@@ -1,12 +1,30 @@
-// Whether the IDS is working now, down the right side of every screen, with
-// what is stored, each engine's dropped packets and its HOME_NET. The
-// engines and the collector, with their dots, head the Overview. The "… ago"
-// times count on between answers, and when none comes.
-import { ENGINES, NAMES, byEngine, count, machineTime, useNow, type Fetched, type Status, type Storage } from "./api";
+// Whether the IDS is working now. At the top of the Overview, one strip
+// (StatusStrip): live or what is wrong, then each engine and the collector
+// with their dots and how long ago each last alerted or stored. Down its
+// right side, a panel (StatusPanel): what is stored, each engine's dropped
+// packets, the disk and HOME_NET. The "… ago" times count on between
+// answers, and when none comes. The Alert Explorer has neither: there a
+// line says so only when something is wrong (StatusNote).
+import type { ReactNode } from "react";
+import {
+  ENGINES,
+  NAMES,
+  byEngine,
+  count,
+  machineTime,
+  runningNow,
+  useNow,
+  type Fetched,
+  type Status,
+  type Storage,
+} from "./api";
 import { clock, duration } from "./time";
 
 // The collector stores alerts several times a minute on the lab network.
 const QUIET_MS = 5 * 60 * 1000;
+// An engine whose newest alert is older than this is shown as quiet (as the
+// Overview's warning says).
+const ENGINE_QUIET_MS = 30 * 60 * 1000;
 
 type Level = "ok" | "warn" | "down" | "unknown";
 
@@ -67,22 +85,110 @@ export function backupLate(storage: Storage, now: number): boolean {
   return newest !== null && newest !== undefined && now - newest > 36 * 60 * 60 * 1000;
 }
 
-export function StatusPanel({ status }: { status: Fetched<Status> }) {
+/** A program's dot: green while it runs, red when it is stopped, grey when that is not known. */
+function Dot({ running }: { running: boolean | null }) {
+  return (
+    <span
+      className={running === null ? "dot unknown" : running ? "dot on" : "dot off"}
+      title={running === null ? "Not known" : running ? "Running" : "Not running"}
+    />
+  );
+}
+
+/** Over the Alert Explorer: what is wrong, and nothing while the IDS is live. */
+export function StatusNote({ status }: { status: Fetched<Status> }) {
+  const now = useNow();
+  const { level, label, detail } = summary(status, machineTime(status, now) ?? now, now);
+  if (level === "ok" || level === "unknown") return null;
+  return (
+    <p className="warning" role="status">
+      <strong>{label}</strong>
+      {detail && `: ${detail}`}
+    </p>
+  );
+}
+
+/** One cell of the strip: a name with its dot, a value, a line under it. */
+function Cell({
+  name,
+  dot,
+  value,
+  detail,
+  quiet = false,
+}: {
+  name: string;
+  dot: ReactNode;
+  value: string;
+  detail: string;
+  quiet?: boolean;
+}) {
+  return (
+    <div className="strip-cell">
+      <div className="strip-name">
+        {dot}
+        {name}
+      </div>
+      <div className={quiet ? "strip-value quiet" : "strip-value"}>{value}</div>
+      <div className="strip-detail">{detail}</div>
+    </div>
+  );
+}
+
+/** At the top of the Overview: live, or what is wrong; then each engine with
+ * how long ago its newest alert was and its rules, and the collector with
+ * how long ago it last stored alerts. */
+export function StatusStrip({ status }: { status: Fetched<Status> }) {
   const now = useNow();
   const machineNow = machineTime(status, now) ?? now;
   const { level, label, detail } = summary(status, machineNow, now);
+  const { data } = status;
+  const running = runningNow(status);
+  const engines = data ? byEngine(data.engines) : [];
+  const saved = data?.collector_saved_ms ?? null;
+
+  return (
+    <section className={`status-strip ${level}`} aria-label="IDS status">
+      <div className="strip-cell overall" role="status">
+        <div className="strip-name">Status</div>
+        <div className="strip-value">
+          <span className="status-dot" aria-hidden="true" />
+          {label}
+        </div>
+        <div className="strip-detail">{detail || (level === "ok" ? "storing alerts now" : "")}</div>
+      </div>
+      {engines.map(([engine, info]) => (
+        <Cell
+          key={engine}
+          name={NAMES[engine]}
+          dot={<Dot running={running ? (running[engine] ?? null) : null} />}
+          value={info.newest_ms !== null ? `${duration(machineNow - info.newest_ms)} ago` : "No alerts"}
+          quiet={info.newest_ms === null || machineNow - info.newest_ms > ENGINE_QUIET_MS}
+          detail={`last alert${info.rules !== null ? ` · ${count(info.rules)} rules` : ""}`}
+        />
+      ))}
+      <Cell
+        name="Collector"
+        dot={<Dot running={running ? running.collector : null} />}
+        value={saved !== null ? `${duration(machineNow - saved)} ago` : data ? "Nothing stored" : "Checking…"}
+        quiet={saved !== null && machineNow - saved > QUIET_MS}
+        detail="last stored alerts"
+      />
+    </section>
+  );
+}
+
+/** Down the Overview's right side: what is stored, the drops, the disk and HOME_NET. */
+export function StatusPanel({ status }: { status: Fetched<Status> }) {
+  const now = useNow();
+  const machineNow = machineTime(status, now) ?? now;
   const { data } = status;
   const storage = data?.storage;
   const engines = data ? byEngine(data.engines) : [];
   const oldest = engines.map(([, info]) => info.oldest_ms).filter((ms): ms is number => ms !== null);
 
   return (
-    <aside className={`status-panel ${level}`} aria-label="IDS status">
-      <div className="status-head" role="status">
-        <span className="status-dot" aria-hidden="true" />
-        <strong>{label}</strong>
-      </div>
-      {detail && <p className="status-detail">{detail}</p>}
+    <aside className="status-panel" aria-label="What is stored">
+      {!data && <p className="muted">{status.error || "Checking…"}</p>}
       {data && (
         <>
           <div className="status-item">

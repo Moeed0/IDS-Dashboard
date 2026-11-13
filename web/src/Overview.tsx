@@ -1,22 +1,18 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   NAMES,
   byEngine,
   count,
   machineTime,
   ruleName,
-  runningNow,
   useApi,
   useNow,
   useRemembered,
   type Engine,
-  type EngineStatus,
-  type Fetched,
   type LiveData,
   type OffPeriod,
   type Options,
   type OverviewData,
-  type Status,
   type TopRule,
 } from "./api";
 import { LineChart } from "./LineChart";
@@ -90,25 +86,14 @@ export function Tile({
   label,
   value,
   details = [],
-  running,
 }: {
   label: string;
   value: string;
   details?: string[];
-  /** A dot: green while the program runs, red when it is stopped, grey when that is not known. */
-  running?: boolean | null;
 }) {
   return (
     <div className="tile">
-      <div className="tile-label">
-        {running !== undefined && (
-          <span
-            className={running === null ? "dot unknown" : running ? "dot on" : "dot off"}
-            title={running === null ? "Not known" : running ? "Running" : "Not running"}
-          />
-        )}
-        {label}
-      </div>
+      <div className="tile-label">{label}</div>
       <div className="tile-value">{value}</div>
       {details.filter(Boolean).map((detail) => (
         <div className="tile-detail" key={detail}>
@@ -140,7 +125,9 @@ function offInside(off: OffPeriod[] = [], startMs: number, endMs: number): numbe
   return off.reduce((total, [from, to]) => total + Math.max(0, Math.min(to, endMs) - Math.max(from, startMs)), 0);
 }
 
-function RuleTable({ rules, onSearch }: { rules: TopRule[]; onSearch: (text: string) => void }) {
+function RuleTable({ engine, rules, onSearch }: { engine: Engine; rules: TopRule[]; onSearch: (text: string) => void }) {
+  // A bar behind each count, as long as its share of the busiest rule's.
+  const most = Math.max(1, ...rules.map((rule) => rule.alerts));
   return (
     <div className="table-wrap">
       <table>
@@ -157,11 +144,16 @@ function RuleTable({ rules, onSearch }: { rules: TopRule[]; onSearch: (text: str
           {rules.map((rule) => (
             <tr key={`${rule.rule}:${rule.rev}`}>
               <td className="rule">
-                <button type="button" className="link" title="Search the Alert Explorer for it" onClick={() => onSearch(ruleName(rule))}>
+                <button type="button" className="link" title="Show its alerts in the Alert Explorer" onClick={() => onSearch(ruleName(rule))}>
                   {ruleName(rule)}
                 </button>
               </td>
-              <td className="number">{count(rule.alerts)}</td>
+              <td
+                className={`number bar ${engine}`}
+                style={{ "--share": `${Math.round((100 * rule.alerts) / most)}%` } as CSSProperties}
+              >
+                {count(rule.alerts)}
+              </td>
               <td className="message" title={rule.message}>
                 {rule.message}
               </td>
@@ -173,55 +165,12 @@ function RuleTable({ rules, onSearch }: { rules: TopRule[]; onSearch: (text: str
   );
 }
 
-/**
- * Each engine, and the collector that stores their alerts: whether it runs
- * and how long ago its newest alert was (the collector's: when it last
- * stored alerts), from the status (it comes more often than the screen's
- * data), with the times counting on between answers and when none comes.
- */
-function StatusCards({
-  engines,
-  status,
-}: {
-  engines: Partial<Record<Engine, EngineStatus>>;
-  status: Fetched<Status>;
-}) {
-  const now = useNow();
-  const machineNow = machineTime(status, now) ?? now;
-  const running = runningNow(status);
-  const fresh = status.data?.engines ?? engines;
-  const saved = status.data?.collector_saved_ms ?? null;
-  const stored = saved !== null ? `${duration(machineNow - saved)} ago` : status.data ? "Nothing stored" : "Checking…";
-  return (
-    <div className="tiles">
-      {byEngine(fresh).map(([engine, info]) => (
-        <Tile
-          key={engine}
-          label={NAMES[engine]}
-          running={running ? (running[engine] ?? null) : null}
-          value={info.newest_ms !== null ? `${duration(machineNow - info.newest_ms)} ago` : "No alerts"}
-          details={[info.rules !== null ? `${count(info.rules)} rules` : ""]}
-        />
-      ))}
-      <Tile
-        label="Collector"
-        running={running ? running.collector : null}
-        value={stored}
-        details={["last stored alerts"]}
-      />
-    </div>
-  );
-}
-
 export function Overview({
   options,
-  status,
   onUnauthorized,
   onSearch,
 }: {
   options: Options;
-  /** What the status panel shows, every 10 seconds. */
-  status: Fetched<Status>;
   onUnauthorized: () => void;
   /** Opens the Alert Explorer searching for a rule. */
   onSearch: (text: string) => void;
@@ -305,11 +254,7 @@ export function Overview({
   return (
     <>
       {error && <p className="error">{error}</p>}
-      <section>
-        <h2>Status</h2>
-        <StatusCards engines={data.engines} status={status} />
-        {warnings}
-      </section>
+      {warnings}
 
       {!lastHour && <p className="muted">No alerts stored yet.</p>}
       {lastHour && (
@@ -386,7 +331,7 @@ export function Overview({
             {byEngine(top.rules).map(([engine, rules]) => (
               <div key={engine}>
                 <h3>{NAMES[engine]}</h3>
-                {rules.length ? <RuleTable rules={rules} onSearch={onSearch} /> : <p className="muted">None</p>}
+                {rules.length ? <RuleTable engine={engine} rules={rules} onSearch={onSearch} /> : <p className="muted">None</p>}
               </div>
             ))}
           </div>
