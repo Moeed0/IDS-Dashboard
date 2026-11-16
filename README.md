@@ -42,7 +42,8 @@ steps 1 and 2):
 the engines it finds, builds the rule index, lets the collector read the
 engines' logs, puts the 24 basic local rules into both engines
 (`--no-local-rules` leaves them out), saves their rule counts, and installs
-the collector and the dashboard as services that start at boot. Check `.env`'s paths afterwards;
+the collector and the dashboard as services that start at boot, with the
+nightly backup and the hourly test alert. Check `.env`'s paths afterwards;
 when one changes, run `./setup.sh` again (it keeps `.env`). It needs Python
 3 with its `venv` module (tested with 3.13) and sudo. `./setup.sh --help`
 lists its options.
@@ -55,7 +56,7 @@ the newer zip in the folder that holds it, then unzip over it and run the
 setup again:
 
 ```bash
-unzip -o IDS-Dashboard-v1.0.1.zip && cd IDS-Dashboard && ./setup.sh
+unzip -o IDS-Dashboard-v1.2.1.zip && cd IDS-Dashboard && ./setup.sh
 ```
 
 That replaces the code and the page, and restarts the services with them.
@@ -80,8 +81,8 @@ network interface (afpacket)
 ```
 
 - **Overview:**
-  - whether each engine and the collector run, and how many packets each
-    engine dropped in the last hour;
+  - whether each engine and the collector run, how many packets each
+    engine dropped in the last hour, and the last hourly test alert;
   - the last hour's alerts, and the packets one or both engines alerted on;
   - the last 24 hours, or a live chart of the last 15 minutes, with the
     times the machine was off shaded;
@@ -108,7 +109,7 @@ network interface (afpacket)
 | `src/ids/` | The shared code: settings, database, tailer, normalizer, screen data, combined export, rule and intel lookups, rule index builder |
 | `web/` | The React page (TypeScript, Vite) |
 | `deploy/` | systemd services, the engines' settings for this lab, log rotation ([deploy/README.md](deploy/README.md)) |
-| `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts |
+| `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts; `backup_database.py` and `restore_backup.py` back the database up and put it back; `send_test_alert.py` is the hourly test alert |
 | `config/lab_phases.json` | The lab's attacker addresses, for the dashboard's warnings |
 | `data/` | Data each machine builds or downloads ([data/README.md](data/README.md)) |
 | `alert-archive/` | The alerts older than the database keeps, in 10-day zips (see [Old alerts](#old-alerts)) |
@@ -151,9 +152,11 @@ Neither rule set is in this repository; each comes from its maker.
   ```
 
   This lab also turns on every rule and logs every match: it copies
-  `deploy/suricata/enable.conf` and `modify.conf` to `/etc/suricata/` first.
-  With HOME_NET `any`, run `sudo suricata-update --no-test` instead: its own
-  test fails on 7 rules, and it then puts the old rules back.
+  `deploy/suricata/enable.conf`, `disable.conf` and `modify.conf` to
+  `/etc/suricata/` first. `modify.conf` also rewrites 7 ET rules that
+  wouldn't load with HOME_NET `any`. This lab runs
+  `sudo suricata-update --no-test`: with HOME_NET `any` suricata-update's
+  own test can fail, and it then puts the old rules back.
 
 - **Snort (registered rules, free with an account):** these rules are
   licensed to you and may not be shared, so each machine downloads its own.
@@ -177,6 +180,14 @@ Neither rule set is in this repository; each comes from its maker.
      ```bash
      sudo snort -c /usr/local/etc/snort/snort.lua -T
      ```
+
+  The package also holds Talos's shared-object (SO) rules, compiled for
+  each system, and the free OpenAppID detectors name each flow's
+  application for the app-detect rules. This lab loads both (53,485 rules
+  in all): `deploy/update-rules.sh` copies the SO rules to
+  `/usr/local/lib/snort/so_rules`, which Snort is started with
+  (`--plugin-path`), and installs the detectors in
+  `/usr/local/lib/openappid` (see [deploy/README.md](deploy/README.md)).
 
   Without an account, Snort's community rules (about 4,000) are free:
   `https://www.snort.org/downloads/community/snort3-community-rules.tar.gz`.
@@ -208,7 +219,8 @@ Neither rule set is in this repository; each comes from its maker.
   machine without them. Edit the file and run it again to change them.
 
 - **Keeping them up to date:** a timer fetches Suricata's rules every night
-  and Snort's every week, checks them and loads them (`deploy/update-rules.sh`).
+  and Snort's every week, checks them and loads them (`deploy/update-rules.sh`), the SO rules and OpenAppID
+  detectors included.
   It asks once for the oinkcode, which only root can read afterwards:
 
   ```bash
@@ -281,13 +293,13 @@ by hand.
    Suricata's is read from its log.
 
    ```bash
-   .venv/bin/python scripts/save_rule_counts.py --snort 48757 --suricata-log
+   .venv/bin/python scripts/save_rule_counts.py --snort 53485 --suricata-log
    ```
 
 6. Optional: build the threat-intel database, for the CVE, EPSS,
    known-exploited and ATT&CK details in the combined export. It downloads
-   about 300 MB from NVD, FIRST, CISA and MITRE, and builds a 1.6 GB
-   database in a few minutes. Run it again whenever you want fresher data.
+   about 300 MB from NVD, FIRST, CISA and MITRE, and builds a database of
+   up to 1.6 GB in a few minutes. Run it again whenever you want fresher data.
    Without it the export still works, without those details.
 
    ```bash
@@ -306,8 +318,8 @@ by hand.
 
 ## Old alerts
 
-The database keeps the newest `IDS_ALERT_RETENTION` alerts, about a week at
-600,000. The older ones are not deleted: every minute the collector moves
+The database keeps the newest `IDS_ALERT_RETENTION` alerts: at about
+46,000 alerts a day (mid-November), 600,000 is about 13 days and 1.3 GB. The older ones are not deleted: every minute the collector moves
 them to `alert-archive/` (`IDS_ALERT_ARCHIVE_DIR`).
 
 - `days/2026-11-13.jsonl.gz` holds a day's alerts (PKT), a line of JSON an
@@ -319,7 +331,8 @@ them to `alert-archive/` (`IDS_ALERT_ARCHIVE_DIR`).
   2026 they start on the 3rd, 13th and 23rd.
 - The newest 3 zips stay, 30 days (`IDS_ALERT_ARCHIVE_DAYS=30` in
   `IDS_ALERT_ARCHIVE_ZIP_DAYS=10`-day zips): a new zip removes the oldest.
-  At 83,000 alerts a day a zip is about 100 MB.
+  A zip of 830,000 alerts was about 100 MB, so at 46,000 alerts a day one
+  is about 55 MB.
 
 With `IDS_ALERT_ARCHIVE_DAYS=0` the alerts past the limit are deleted
 instead. When the archive can't be written (a full disk, say), the alerts
@@ -348,8 +361,8 @@ zcat alert-archive/days/2026-11-13.jsonl.gz | head -3
 
 ## Backups
 
-Every night at 03:30 (or at the next start, when the machine was off then)
-the `ids-backup` timer checks the alert database (SQLite's quick_check, about
+Every night at 03:30 (or, when the machine was off then, 15 minutes after
+the next start) the `ids-backup` timer checks the alert database (SQLite's quick_check, about
 10 seconds for 500 MB) and makes a gzipped copy of it in `backups/`
 (`IDS_BACKUP_DIR`), keeping the newest 3 (`IDS_BACKUP_KEEP`; 0 makes none). A
 copy is about a tenth of the database's size. A damaged database isn't
@@ -359,22 +372,6 @@ passed its check. To make one now:
 
 ```bash
 .venv/bin/python scripts/backup_database.py
-```
-
-## The hourly test alert
-
-At 5 past every hour the `ids-test-alert` timer sends one ping out of the
-capture card to `IDS_TEST_ALERT_TARGET` (a machine on the capture network
-that is always on, like the router; empty turns the test off). Each engine's
-own rules flag a Linux ping (Snort 1:366 and 1:384, Suricata 1:2100366 and
-1:2100384), so the test passes when both engines' alerts on it are stored
-within 90 seconds: capture, the rules and the collector all work. The
-Overview's strip shows the last test ("Snort ✓ · Suricata ✓"), and its
-headline says "Test alert missed" when an engine's alert didn't come. Each
-test adds about 9 alerts, from this machine to the target. To run one now:
-
-```bash
-.venv/bin/python scripts/send_test_alert.py
 ```
 
 The database is written with `synchronous=FULL`, so switching the machine
@@ -401,6 +398,22 @@ the logs still hold, and skips the ones the backup has:
 sudo systemctl start ids-collector ids-dashboard
 ```
 
+## The hourly test alert
+
+At 5 past every hour the `ids-test-alert` timer sends one ping out of the
+capture card to `IDS_TEST_ALERT_TARGET` (a machine on the capture network
+that is always on, like the router; empty turns the test off). Each engine's
+own rules flag a Linux ping (Snort 1:366 and 1:384, Suricata 1:2100366 and
+1:2100384), so the test passes when both engines' alerts on it are stored
+within 90 seconds: capture, the rules and the collector all work. The
+Overview's strip shows the last test ("Snort ✓ · Suricata ✓"), and its
+headline says "Test alert missed" when an engine's alert didn't come. Each
+test adds about 9 alerts, from this machine to the target. To run one now:
+
+```bash
+.venv/bin/python scripts/send_test_alert.py
+```
+
 ## Tests
 
 ```bash
@@ -408,8 +421,8 @@ sudo systemctl start ids-collector ids-dashboard
 PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
 
-The page's tests (the packet shading, the severity circles and the status
-panel's headline), in `web/`, after `npm ci`:
+The page's tests (the filters, the packet shading, the severity circles,
+the status headline and the test alert), in `web/`, after `npm ci`:
 
 ```bash
 npm test

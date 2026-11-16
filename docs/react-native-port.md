@@ -591,8 +591,8 @@ alerts is refused with 413 and `{"error": "This window holds 580,123
 alerts; one export holds at most 150,000 on this machine. Choose a shorter
 length."}` before anything is built: building takes about 8 KB of memory
 an alert (1 hour of 3,574 alerts peaked at 94 MB, 6 hours of 21,032 at 227
-MB), so 7 days at 83,000 alerts a day would need about 4.5 GB, more than
-the VM has free. Building took 1.9 s for that hour and 8.3 s for those 6
+MB), so 7 days at 46,000 alerts a day (322,000) would need about 2.6 GB,
+too much next to the engines on this VM. Building took 1.9 s for that hour and 8.3 s for those 6
 hours; rule lookups are kept between exports while the server runs.
 
 ## Times
