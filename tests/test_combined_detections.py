@@ -14,7 +14,6 @@ from ids.extended_alert_intelligence import (
 )
 from ids.combined_detections import (
     PKT,
-    both_engine_alerts,
     build_combined_detections,
     combined_filename,
     complete_window_end,
@@ -347,18 +346,6 @@ def test_the_rules_both_engines_fired_on_one_packet_are_counted_in_pairs():
         },
         "packets": 1,
     }]
-
-
-def test_both_engine_alerts_are_the_rows_on_a_packet_both_engines_alerted_on():
-    rows = [
-        _suricata_row(_suricata_native(timestamp="2026-10-15T15:54:02.661821+0500")),
-        _snort_row(),
-        # Suricata's alert on the next packet, and Snort's on an IGMP query.
-        _suricata_row(),
-        _igmp_row(),
-    ]
-
-    assert both_engine_alerts({**row, "id": number} for number, row in enumerate(rows, 1)) == {1, 2}
 
 
 def test_alerts_on_different_packets_of_a_connection_are_separate_entries():

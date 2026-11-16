@@ -106,25 +106,6 @@ def _read_json_payloads(path: Path) -> Iterator[tuple[dict[str, Any], str]]:
         yield payload, path.name
 
 
-def _nvd_cve_records(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    entries = payload.get("vulnerabilities")
-
-    if isinstance(entries, list):
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            cve = entry.get("cve", entry)
-            if isinstance(cve, dict) and cve.get("id"):
-                yield cve
-        return
-
-    cve = payload.get("cve")
-    if isinstance(cve, dict) and cve.get("id"):
-        yield cve
-    elif payload.get("id") and isinstance(payload.get("descriptions"), list):
-        yield payload
-
-
 def _extract_cvss(cve: dict[str, Any]) -> dict[str, Any] | None:
     metrics = cve.get("metrics")
     if not isinstance(metrics, dict):
@@ -192,8 +173,6 @@ def _nvd_summary(cve: dict[str, Any]) -> dict[str, Any]:
         "references": references,
         "configurations": cve.get("configurations", []),
     }
-
-
 
 
 class _StreamingJSONReader:
@@ -741,16 +720,6 @@ def import_sources(
                 connection, "mitre_attack", date, version, counts["mitre_attack"], [mitre_file]
             )
 
-            connection.execute("DELETE FROM cve_search")
-            connection.execute(
-                "INSERT INTO cve_search(cve_id, description) "
-                "SELECT cve_id, description FROM cves"
-            )
-            connection.execute("DELETE FROM attack_search")
-            connection.execute(
-                "INSERT INTO attack_search(technique_id, name, description) "
-                "SELECT technique_id, name, description FROM attack_techniques"
-            )
             connection.commit()
 
             check = connection.execute("PRAGMA integrity_check").fetchone()[0]

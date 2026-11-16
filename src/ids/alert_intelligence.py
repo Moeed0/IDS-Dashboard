@@ -10,25 +10,6 @@ RULE_DB_PATH = PROJECT_ROOT / "data/lab/rules/ids_rules.db"
 RULE_DOCS_PATH = PROJECT_ROOT / "data/json/rule_docs_preprocessed_by_sid.json"
 
 
-def _load_rule_docs() -> dict[str, Any]:
-    """Load the existing preprocessed rule documentation dataset."""
-
-    if not RULE_DOCS_PATH.exists():
-        raise FileNotFoundError(
-            f"Rule documentation dataset not found: {RULE_DOCS_PATH}"
-        )
-
-    with RULE_DOCS_PATH.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-
-    if not isinstance(data, dict):
-        raise ValueError(
-            "Rule documentation dataset must be a JSON object keyed by SID."
-        )
-
-    return data
-
-
 def _fetch_rule(
     gid: int,
     sid: int,
@@ -215,8 +196,6 @@ def get_alert_intelligence(
             ),
         },
     }
-
-
 
 
 def _build_normalized_alert(

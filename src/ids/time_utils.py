@@ -162,23 +162,3 @@ def parse_event_timestamp(
 
     except (TypeError, ValueError, OSError, OverflowError):
         return None
-
-
-def packet_time_fields(
-    packet_epoch_seconds: float | int,
-) -> tuple[str, int]:
-    """
-    Convert Scapy packet capture time into:
-    - legacy local timestamp string
-    - normalized UTC epoch-ms
-    """
-    epoch = float(packet_epoch_seconds)
-    local_dt = datetime.fromtimestamp(
-        epoch,
-        tz=local_timezone(),
-    )
-
-    return (
-        local_dt.strftime("%Y-%m-%d %H:%M:%S"),
-        int(round(epoch * 1000)),
-    )

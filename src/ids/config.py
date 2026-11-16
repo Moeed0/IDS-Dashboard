@@ -164,7 +164,6 @@ class Settings:
     suricata_eve_file: Path
     interface: str
     alert_retention: int
-    packet_retention: int
     batch_size: int
     batch_flush_ms: int
     retention_interval_seconds: int
@@ -229,11 +228,6 @@ def get_settings() -> Settings:
         alert_retention=_int_from_env(
             "IDS_ALERT_RETENTION",
             10000,
-            minimum=1,
-        ),
-        packet_retention=_int_from_env(
-            "IDS_PACKET_RETENTION",
-            5000,
             minimum=1,
         ),
         batch_size=_int_from_env(

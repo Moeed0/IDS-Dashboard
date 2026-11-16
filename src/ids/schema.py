@@ -58,29 +58,11 @@ ALERT_PHASE1_COLUMNS = {
 }
 
 
-PACKET_BASE_COLUMNS = {
-    "timestamp": "TEXT",
-    "src": "TEXT",
-    "dst": "TEXT",
-    "protocol": "TEXT",
-    "src_port": "INTEGER",
-    "dst_port": "INTEGER",
-    "size": "INTEGER",
-    "info": "TEXT",
-    "tcp_flags": "TEXT",
-}
-
-
-PACKET_PHASE1_COLUMNS = {
-    "event_ts_utc": "INTEGER",
-}
-
-
 def _table_columns(
     conn: sqlite3.Connection,
     table: str,
 ) -> set[str]:
-    allowed_tables = {"alerts", "packets"}
+    allowed_tables = {"alerts"}
 
     if table not in allowed_tables:
         raise ValueError(f"Unsupported table: {table}")
@@ -103,23 +85,9 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS packets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            src TEXT,
-            dst TEXT,
-            protocol TEXT,
-            src_port INTEGER,
-            dst_port INTEGER,
-            size INTEGER,
-            info TEXT,
-            tcp_flags TEXT,
-            event_ts_utc INTEGER
-        )
-        """
-    )
+    # A packets table of an early design was never written to: gone, with
+    # its index.
+    conn.execute("DROP TABLE IF EXISTS packets")
 
     conn.execute(
         """
@@ -276,13 +244,6 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
         """
     )
 
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_packets_event_ts_utc
-        ON packets(event_ts_utc)
-        """
-    )
-
 
 # The Alert Explorer's filters, each with the engine and time after it: a
 # filter's alerts are counted, and come newest first, from its index alone,
@@ -341,18 +302,6 @@ def ensure_schema(conn: sqlite3.Connection, uid_mark: Path | None = None) -> Non
 
     if not had_app:
         _fill_app(conn)
-
-    _add_missing_columns(
-        conn,
-        "packets",
-        PACKET_BASE_COLUMNS,
-    )
-
-    _add_missing_columns(
-        conn,
-        "packets",
-        PACKET_PHASE1_COLUMNS,
-    )
 
     _create_indexes(conn)
     _create_filter_indexes(conn)

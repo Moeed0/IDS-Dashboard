@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-import re
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -86,12 +85,6 @@ CREATE TABLE IF NOT EXISTS attack_techniques (
 
 CREATE INDEX IF NOT EXISTS idx_attack_techniques_name
     ON attack_techniques(name);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS cve_search
-    USING fts5(cve_id, description);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS attack_search
-    USING fts5(technique_id, name, description);
 """
 
 
@@ -280,148 +273,6 @@ def get_attack_technique(
         "data_sources": _json_value(row["data_sources_json"], []),
         "url": row["url"],
         "is_subtechnique": bool(row["is_subtechnique"]),
-    }
-
-
-def _search_rows(
-    table: str,
-    query: str,
-    limit: int,
-    db_path: str | Path,
-) -> list[dict[str, Any]]:
-    """Search the appropriate FTS5 index using read-only SQL."""
-    text = str(query).strip()
-    if not text:
-        return []
-
-    limit = max(1, min(int(limit), 100))
-    tokens = re.findall(r"[A-Za-z0-9]+", text)
-    if not tokens:
-        return []
-
-    # Whitelist all SQL identifiers; never accept table names from user input.
-    search_config = {
-        "cve_search": (
-            "cve_id, description",
-            "cves",
-            ("cve_id", "description"),
-        ),
-        "attack_search": (
-            "technique_id, name, description",
-            "attack_techniques",
-            ("technique_id", "name", "description"),
-        ),
-    }
-    if table not in search_config:
-        raise ValueError(f"Unsupported search index: {table}")
-
-    selected_columns, source_table, text_columns = search_config[table]
-    match_expression = " AND ".join(f'"{token}"' for token in tokens)
-
-    with connect_offline_db(db_path) as connection:
-        try:
-            rows = connection.execute(
-                f"""
-                SELECT {selected_columns}
-                FROM {table}
-                WHERE {table} MATCH ?
-                LIMIT ?
-                """,
-                (match_expression, limit),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            # Keep searching if this database lacks a working FTS index.
-            # Require each term, but permit the terms to appear in any order.
-            conditions = []
-            params: list[Any] = []
-            for token in tokens:
-                conditions.append(
-                    "(" + " OR ".join(
-                        f"{column} LIKE ?" for column in text_columns
-                    ) + ")"
-                )
-                params.extend([f"%{token}%"] * len(text_columns))
-
-            rows = connection.execute(
-                f"""
-                SELECT {selected_columns}
-                FROM {source_table}
-                WHERE {" AND ".join(conditions)}
-                LIMIT ?
-                """,
-                (*params, limit),
-            ).fetchall()
-
-    return [dict(row) for row in rows]
-
-
-def search_cves(
-    query: str,
-    limit: int = 20,
-    db_path: str | Path = DEFAULT_DB_PATH,
-) -> list[dict[str, Any]]:
-    """Search indexed local CVE identifiers and descriptions."""
-    text = str(query).strip()
-    if not text:
-        return []
-
-    if re.match(r"^CVE-", text, re.IGNORECASE):
-        with connect_offline_db(db_path) as connection:
-            rows = connection.execute(
-                """
-                SELECT cve_id, description
-                FROM cves
-                WHERE cve_id LIKE ?
-                ORDER BY cve_id
-                LIMIT ?
-                """,
-                (f"{text.upper()}%", max(1, min(int(limit), 100))),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    return _search_rows("cve_search", text, limit, db_path)
-
-
-def search_attack_techniques(
-    query: str,
-    limit: int = 20,
-    db_path: str | Path = DEFAULT_DB_PATH,
-) -> list[dict[str, Any]]:
-    """Search indexed local ATT&CK IDs, technique names and descriptions."""
-    text = str(query).strip()
-    if not text:
-        return []
-
-    if re.match(r"^T\d", text, re.IGNORECASE):
-        with connect_offline_db(db_path) as connection:
-            rows = connection.execute(
-                """
-                SELECT technique_id, name, description
-                FROM attack_techniques
-                WHERE technique_id LIKE ?
-                ORDER BY technique_id
-                LIMIT ?
-                """,
-                (f"{text.upper()}%", max(1, min(int(limit), 100))),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    return _search_rows("attack_search", text, limit, db_path)
-
-
-def lookup_cve(
-    cve_id: str,
-    db_path: str | Path = DEFAULT_DB_PATH,
-) -> dict[str, Any]:
-    """Combine available local vulnerability sources without network calls."""
-    cve = str(cve_id).strip().upper()
-
-    return {
-        "cve_id": cve,
-        "nvd": get_cve_record(cve, db_path),
-        "epss": get_epss_record(cve, db_path),
-        "cisa_kev": get_kev_record(cve, db_path),
-        "sources": get_source_metadata(db_path),
     }
 
 

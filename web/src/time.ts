@@ -68,17 +68,3 @@ export function minuteLabel(ms: number): string {
   const { hours, minutes } = pkt(ms);
   return `${two(hours)}:${two(minutes)}`;
 }
-
-/** The value of a datetime-local input showing this time in PKT. */
-export function toPktInput(ms: number): string {
-  const { hours, minutes } = pkt(ms);
-  return `${date(ms)}T${two(hours)}:${two(minutes)}`;
-}
-
-/** The time a datetime-local input means, read as PKT. */
-export function fromPktInput(value: string): number | undefined {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
-  if (!match) return undefined;
-  const [year, month, day, hours, minutes] = match.slice(1).map(Number);
-  return Date.UTC(year, month - 1, day, hours, minutes) - PKT_OFFSET_MS;
-}

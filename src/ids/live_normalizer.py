@@ -39,10 +39,6 @@ def unified_severity(value: Any) -> int:
     return max(1, min(4, parsed))
 
 
-def preserve_native_severity(value: Any) -> int:
-    """Compatibility wrapper for the unified severity scale."""
-    return unified_severity(value)
-
 def normalize_snort_timestamp(alert: dict[str, Any]) -> int | None:
     return parse_event_timestamp(alert)
 

@@ -220,60 +220,6 @@ def insert_alert_batch(
     return inserted
 
 
-def insert_packet_batch(
-    conn: sqlite3.Connection,
-    rows: Iterable[dict[str, Any]],
-) -> int:
-    rows = list(rows)
-
-    if not rows:
-        return 0
-
-    sql = """
-        INSERT INTO packets (
-            timestamp,
-            src,
-            dst,
-            protocol,
-            src_port,
-            dst_port,
-            size,
-            info,
-            tcp_flags,
-            event_ts_utc
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
-
-    values = [
-        (
-            row.get("timestamp"),
-            row.get("src"),
-            row.get("dst"),
-            row.get("protocol"),
-            row.get("src_port"),
-            row.get("dst_port"),
-            row.get("size"),
-            row.get("info"),
-            row.get("tcp_flags"),
-            row.get("event_ts_utc"),
-        )
-        for row in rows
-    ]
-
-    before = conn.total_changes
-
-    conn.executemany(
-        sql,
-        values,
-    )
-
-    inserted = conn.total_changes - before
-    conn.commit()
-
-    return inserted
-
-
 def prune_alerts(
     conn: sqlite3.Connection,
     max_rows: int,
@@ -289,33 +235,6 @@ def prune_alerts(
         WHERE id NOT IN (
             SELECT id
             FROM alerts
-            ORDER BY id DESC
-            LIMIT ?
-        )
-        """,
-        (max_rows,),
-    )
-
-    conn.commit()
-
-    return conn.total_changes - before
-
-
-def prune_packets(
-    conn: sqlite3.Connection,
-    max_rows: int,
-) -> int:
-    if max_rows < 1:
-        raise ValueError("max_rows must be >= 1")
-
-    before = conn.total_changes
-
-    conn.execute(
-        """
-        DELETE FROM packets
-        WHERE id NOT IN (
-            SELECT id
-            FROM packets
             ORDER BY id DESC
             LIMIT ?
         )

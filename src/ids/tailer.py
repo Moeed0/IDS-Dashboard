@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -10,15 +9,6 @@ from ids.rotated_logs import missed_lines
 
 
 FINGERPRINT_BYTES = 256
-
-
-@dataclass
-class TailState:
-    path: str
-    inode: int
-    offset: int
-    fingerprint: str | None = None
-    fingerprint_length: int = 0
 
 
 class PersistentJsonTailer:

@@ -18,8 +18,6 @@ from ids.offline_intelligence import (
     get_epss_record,
     get_kev_record,
     get_source_metadata,
-    search_attack_techniques,
-    search_cves,
 )
 from scripts.import_offline_intelligence import import_sources
 
@@ -207,16 +205,12 @@ def test_epss_and_kev_lookups(offline_db: Path) -> None:
     assert kev["vendorProject"] == "Example"
 
 
-def test_mitre_lookup_and_offline_search(offline_db: Path) -> None:
+def test_mitre_lookup(offline_db: Path) -> None:
     technique = get_attack_technique("T1059", offline_db)
 
     assert technique is not None
     assert technique["name"] == "Command and Scripting Interpreter"
     assert technique["tactics"] == ["execution"]
-    assert search_attack_techniques("Command and Scripting", db_path=offline_db)
-
-    cve_results = search_cves("Remote code execution", db_path=offline_db)
-    assert any(row["cve_id"] == "CVE-2026-12345" for row in cve_results)
 
 
 def test_source_metadata_has_import_dates_and_checksums(offline_db: Path) -> None:
@@ -257,54 +251,6 @@ def test_existing_database_is_not_replaced_without_explicit_permission(
         )
 
     assert target.read_bytes() == b"preserve-this-file"
-
-
-def test_search_functions_use_fts_indexes(
-    offline_db: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    statements: list[str] = []
-
-    class TrackingConnection:
-        def __init__(self, db_path: Path) -> None:
-            self.connection = sqlite3.connect(
-                db_path.resolve().as_uri() + "?mode=ro",
-                uri=True,
-            )
-            self.connection.row_factory = sqlite3.Row
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback) -> None:
-            self.connection.close()
-
-        def execute(self, sql: str, parameters=()):
-            statements.append(sql)
-            return self.connection.execute(sql, parameters)
-
-    monkeypatch.setattr(
-        offline_module,
-        "connect_offline_db",
-        lambda db_path: TrackingConnection(Path(db_path)),
-    )
-
-    cve_results = offline_module.search_cves(
-        "execution Remote",
-        db_path=offline_db,
-    )
-    assert any(row["cve_id"] == "CVE-2026-12345" for row in cve_results)
-    assert len(statements) == 1
-    assert "cve_search MATCH ?" in statements[0]
-
-    statements.clear()
-    attack_results = offline_module.search_attack_techniques(
-        "Interpreter Command",
-        db_path=offline_db,
-    )
-    assert any(row["technique_id"] == "T1059" for row in attack_results)
-    assert len(statements) == 1
-    assert "attack_search MATCH ?" in statements[0]
 
 
 def test_read_connection_is_closed_after_lookup(
@@ -392,7 +338,6 @@ def test_import_streams_compressed_nvd_feed(tmp_path: Path) -> None:
     record = get_cve_record("CVE-2026-12345", database)
     assert record is not None
     assert record["cvss"]["base_score"] == 9.8
-
 
 
 # It looks the rule up in the real rule index, which each machine builds.
