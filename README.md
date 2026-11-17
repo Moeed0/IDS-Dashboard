@@ -96,8 +96,10 @@ network interface (afpacket)
   fired, and the other alerts on its packet. What the filters choose can be
   downloaded as combined JSON
   ([docs/combined-json-format.md](docs/combined-json-format.md)) or sent to
-  the LLM PC (`IDS_LLM_URL` in `.env`); the old alerts' zips are at the
-  bottom.
+  the LLM PC (`IDS_LLM_URL` in `.env`), where `scripts/llm_receiver.py`
+  saves each file in a folder (copy it there and run
+  `python llm_receiver.py`; standard library only); the old alerts' zips
+  are at the bottom.
 
 ## What is where
 
