@@ -58,7 +58,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "10.1"
+SCHEMA_VERSION = "11.0"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -926,7 +926,7 @@ def _rule_facts(
     }
 
 
-def _rule_section(facts: Mapping[str, Any]) -> dict[str, Any]:
+def _rule_section(facts: Mapping[str, Any], rule_text: bool = False) -> dict[str, Any]:
     """Everything known about the rule, given with every alert it raised."""
     meaning = facts.get("what_it_means") or ""
     if meaning.startswith("The rule is associated with") or meaning in _GENERIC_SENTENCES:
@@ -986,7 +986,7 @@ def _rule_section(facts: Mapping[str, Any]) -> dict[str, Any]:
     # removed, and a link inside a content match is detection logic.
     return prune_empty({
         "why_triggered": section.pop("why_triggered", None),
-        "rule_text": facts.get("rule_text"),
+        "rule_text": facts.get("rule_text") if rule_text else None,
         "documentation": documentation,
         **section,
     })
@@ -999,20 +999,14 @@ def _alert_counts(matches: Iterable[_Match]) -> dict[str, int]:
 
 
 def _rule_ids(rule_keys: Iterable[str]) -> dict[str, str]:
-    """Short, readable rule names for the file: ``engine:sid``, with the GID
-    when it is not the default 1 (``snort:116:408``). A rule that fired with
-    two revisions in one window gets its revision too (``snort:31978:rev5``)."""
+    """The rule names in the file, one format for both engines:
+    ``snort_signature:GID:SID:REV`` and ``suricata_signature:GID:SID:REV``
+    (``snort_signature:116:408:1``, ``suricata_signature:1:2001119:6``)."""
     names: dict[str, str] = {}
     for key in rule_keys:
         engine, *numbers = key.split(":")
-        if len(numbers) >= 2 and numbers[0] == "1":
-            numbers = numbers[1:]
-        names[key] = ":".join([engine, *numbers[:-1]]) if len(numbers) >= 2 else key
-    counts = Counter(names.values())
-    return {
-        key: f"{name}:rev{key.rsplit(':', 1)[-1]}" if counts[name] > 1 else name
-        for key, name in names.items()
-    }
+        names[key] = ":".join([f"{engine}_signature", *numbers])
+    return names
 
 
 def _same_as_packet(engine: str, field: str, value: Any, fact: Any) -> bool:
@@ -1205,12 +1199,11 @@ def _int(value: Any) -> Any:
 
 
 def _rule_name_ids(name: str) -> dict[str, Any]:
-    """The GID (when not 1), SID and revision (when given) in a rule's name,
-    such as ``snort:116:408`` or ``snort:31978:rev5``."""
+    """The GID, SID and revision in a rule's name,
+    ``snort_signature:116:408:1``."""
     _, *parts = name.split(":")
-    rev = int(parts.pop()[3:]) if parts and parts[-1].startswith("rev") else None
-    gid, sid = (parts[0], parts[1]) if len(parts) == 2 else (None, parts[0] if parts else None)
-    return {"gid": _int(gid), "sid": _int(sid), "rev": rev}
+    gid, sid, rev = [*parts, None, None, None][:3]
+    return {"gid": _int(gid), "sid": _int(sid), "rev": _int(rev)}
 
 
 def _rule_text_option(text: Any, option: str) -> Any:
@@ -1225,8 +1218,7 @@ def _stated_rule_ids(name: str, rule_text: Any) -> dict[str, Any]:
     """The GID, SID, revision and message a rule's name and rule text give."""
     named = _rule_name_ids(name)
     return {
-        # A rule's name gives its GID when it isn't 1, the GID of text rules.
-        "gid": named["gid"] if named["gid"] is not None else 1,
+        "gid": named["gid"],
         "sid": named["sid"],
         "rev": named["rev"] if named["rev"] is not None else _rule_text_option(rule_text, "rev"),
         "msg": _rule_text_option(rule_text, "msg"),
@@ -1608,6 +1600,7 @@ def build_combined_detections(
     rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None] | None = None,
     generated_at: datetime | None = None,
     trim_to_window: bool = True,
+    rule_text: bool = False,
 ) -> dict[str, Any]:
     """Build the combined Snort + Suricata document for one time window.
 
@@ -1616,6 +1609,9 @@ def build_combined_detections(
     is called once per rule with (engine, gid, sid, message) and returns the
     offline intelligence for that rule. With ``trim_to_window`` false every
     row is kept: the caller chose them (the window then only says when).
+    With ``rule_text`` the rules carry their rule text (the dashboard's
+    alert view shows it); the file sent to the LLM leaves it out: the rule's
+    name gives its GID, SID and revision.
 
     The document is a timeline of the packets the alerts are on, oldest
     first; a packet both engines alerted on is one entry with both engines'
@@ -1690,7 +1686,7 @@ def build_combined_detections(
             )
     outputs = {key: prune_empty(output) for key, output in outputs.items()}
     rule_entries = {
-        key: prune_empty({"ids_output": common[key], **_rule_section(rule_facts[key])})
+        key: prune_empty({"ids_output": common[key], **_rule_section(rule_facts[key], rule_text)})
         for key in by_rule
     }
     # An alert names its rule only when the file holds something about it.

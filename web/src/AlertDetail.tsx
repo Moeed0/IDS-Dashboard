@@ -29,12 +29,10 @@ function Value({ value }: { value: unknown }) {
   return <pre>{JSON.stringify(value, null, 2)}</pre>;
 }
 
-/** The rule's entry among the file's rules: "snort:116:444", or with ":rev5"
- * after it when two revisions fired. */
+/** The rule's entry among the file's rules: "snort_signature:116:444:1". */
 export function ruleEntry(rules: AlertDetails["rules"], alert: AlertRow): Record<string, unknown> | null {
-  const name = `${alert.engine}:${alert.rule}`;
-  const key = Object.keys(rules ?? {}).find((candidate) => candidate === name || candidate === `${name}:rev${alert.rev}`);
-  return key ? (rules?.[key] ?? null) : null;
+  const name = `${alert.engine}_signature:${alert.gid ?? 1}:${alert.sid}:${alert.rev}`;
+  return rules?.[name] ?? null;
 }
 
 function Fact({ name, children }: { name: string; children: ReactNode }) {

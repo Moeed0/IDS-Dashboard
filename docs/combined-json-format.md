@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 10.1)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 11.0)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -28,7 +28,8 @@ are not in it. Nothing is written twice (9.0):
   `attack_techniques`, however many rules name it;
 - what says what the packet is is given once, with the packet, and so is
   what an engine's different alerts on one packet share (9.1);
-- what a rule's name or rule text states is not repeated in its IDS output;
+- what a rule's name states (GID, SID, revision) is not repeated in its IDS
+  output;
 - what the alert's time and Suricata's raw packet already say (the engine's
   `timestamp`, Suricata's `payload_printable`) is derived from them, not
   written again (10.0).
@@ -191,11 +192,12 @@ together:
 4. the packet's shared part, `ids_output` under the engine's name on the
    packet, when the engine has more than one entry there;
 5. the entry's own `ids_output`: everything else;
-6. what the rule's name and rule text state: the SID, the GID (1 when the
-   name gives none), the revision (from a `:revN` name or the rule text's
-   `rev`), the message (the rule text's `msg`), and Snort's `rule` field,
-   which is `gid:sid:rev`. Each is left out of the rule's `ids_output` only
-   when it says exactly the same;
+6. what the rule's name states (11.0): the GID, SID and revision of
+   `snort_signature:GID:SID:REV` or `suricata_signature:GID:SID:REV`, and
+   Snort's `rule` field, which is `gid:sid:rev`. Each is left out of the
+   rule's `ids_output` only when it says exactly the same. The message
+   (Snort `msg`, Suricata `alert.signature`) stays in the rule's
+   `ids_output`;
 7. the packet's fields, under the engine's own names and in its own
    spelling: Snort `proto`, `src_addr`, `src_port`, `dst_addr`, `dst_port`,
    `icmp_type`, `icmp_code`; Suricata `proto`, `src_ip`, `src_port`,
@@ -225,16 +227,18 @@ Parts 2 to 5 never hold the same field twice; each can replace a default
 from part 1. So they are merged key by key (inside `alert` and `flow` too),
 the defaults first, and then each `null` at a default's field is removed.
 `ids.combined_detections.rebuild_ids_output` does this; the tests and a check
-on the live data (all 26,168 alerts stored on 17 Nov 2026 by 15:20) rebuild
-each alert's record exactly as the engine wrote it. The defaults made those
+on the live data (all 30,769 alerts stored on 17 Nov 2026 by 16:45, with
+11.0) rebuild each alert's record exactly as the engine wrote it. The defaults made those
 files 9 to 15% smaller than 10.0's.
 
 ## Rules
 
 `rules` holds each rule that fired in the window once, by the name its
-alerts give: `engine:sid`, with the GID when it is not the default 1
-(`snort:116:408`, a Snort built-in rule), and with the revision when one rule
-fired with two revisions in the window (`snort:31978:rev5`). A rule appears
+alerts give, in one format for both engines (11.0):
+`snort_signature:GID:SID:REV` and `suricata_signature:GID:SID:REV`, such as
+`snort_signature:116:408:1` (a Snort built-in rule),
+`snort_signature:1:31978:5` and `suricata_signature:1:2001119:6`. Two
+revisions of one rule are two rules. A rule appears
 only when the file has something to say about it. Each rule has its
 `ids_output` part (see The IDS output in parts) and the enrichment from
 the local rule files and offline intelligence:
@@ -246,11 +250,12 @@ the local rule files and offline intelligence:
   by step (`at the start, any 2 bytes other than 0x0a, then a byte from 0x81
   to 0x87, then the byte 0x85`). A regular expression that cannot be worded
   exactly (PCRE-only syntax, or words over 1,000 characters) is "the regular
-  expression in the rule text". `rule_text` keeps every pattern as written.
-  Snort's built-in rules (GID above 1) have no rule text; their message names
-  the check that failed.
-- `rule_text` — the rule as written in the local Snort or Suricata rule
-  file, without its web-link and CVE references (`reference:url,…`,
+  expression in the rule text". Snort's built-in rules (GID above 1) have
+  no rule text; their message names the check that failed.
+- The rule text itself is not in the file (11.0): its `sid` and `rev`
+  options would name the rule a second way, next to its name. The
+  dashboard's alert view shows it (`rule_text`): the rule as written in the
+  local Snort or Suricata rule file, without its web-link and CVE references (`reference:url,…`,
   `reference:cve,…`; the CVEs are the rule's `cves`) and its `metadata`
   option (rule upkeep or policy information, or a repeat of Suricata's own
   alert metadata). Every other option stays as written; a link inside a
@@ -332,5 +337,3 @@ The dashboard calls it "App" and filters by it.
 - A CVE named in a rule's message or in Suricata's own alert metadata
   (`cve: ["CVE_2014_6271"]`) as well as in the rule's `cves`: the message and
   metadata are the engine's own words, kept so each alert rebuilds exactly.
-- The `rule_text` keeps the rule's own `sid` option, which the rule's name
-  also gives: the rule text is kept as the rule is written.

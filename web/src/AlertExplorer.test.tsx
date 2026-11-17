@@ -72,12 +72,13 @@ describe("arrived", () => {
 });
 
 describe("ruleEntry", () => {
-  it("finds the alert's rule among the packet's, with its revision when two fired", () => {
-    const alert = { ...row(1, 1), engine: "snort" as const, rule: "116:444", rev: 1 };
+  it("finds the alert's rule among the packet's by engine_signature:GID:SID:REV", () => {
+    const alert = { ...row(1, 1), engine: "snort" as const, rule: "116:444:1", gid: 116, sid: 444, rev: 1 };
 
-    expect(ruleEntry({ "snort:116:444": { rule_text: "a" }, "suricata:2001119": {} }, alert)).toEqual({ rule_text: "a" });
-    expect(ruleEntry({ "snort:116:444:rev1": { rule_text: "b" } }, alert)).toEqual({ rule_text: "b" });
-    expect(ruleEntry({ "suricata:2001119": {} }, alert)).toBeNull();
+    expect(ruleEntry({ "snort_signature:116:444:1": { rule_text: "a" }, "suricata_signature:1:2001119:6": {} }, alert)).toEqual({ rule_text: "a" });
+    // Another revision of the rule is another rule.
+    expect(ruleEntry({ "snort_signature:116:444:2": { rule_text: "b" } }, alert)).toBeNull();
+    expect(ruleEntry({ "suricata_signature:1:2001119:6": {} }, alert)).toBeNull();
     expect(ruleEntry(undefined, alert)).toBeNull();
   });
 });

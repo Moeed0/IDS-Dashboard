@@ -300,8 +300,8 @@ def test_a_packet_both_engines_alerted_on_is_one_entry():
     }
     snort, = packet["snort"]
     suricata, = packet["suricata"]
-    assert snort["rules"] == ["snort:31978"]
-    assert suricata["rules"] == ["suricata:2019232"]
+    assert snort["rules"] == ["snort_signature:1:31978:5"]
+    assert suricata["rules"] == ["suricata_signature:1:2019232:7"]
     # Both stamped the packet at the packet's time.
     assert "time" not in snort
     assert "time" not in suricata
@@ -551,10 +551,10 @@ def test_several_rules_on_one_packet_are_one_entry_per_engine():
     first, second = document["packets"]
     snort, = first["snort"]
     suricata, = first["suricata"]
-    assert snort["rules"] == ["snort:31978"]
+    assert snort["rules"] == ["snort_signature:1:31978:5"]
     # Suricata's two alerts on this packet differ only in the rule.
-    assert suricata["rules"] == ["suricata:2019232", "suricata:2022028"]
-    assert second["snort"][0]["rules"] == ["snort:31978"]
+    assert suricata["rules"] == ["suricata_signature:1:2019232:7", "suricata_signature:1:2022028:7"]
+    assert second["snort"][0]["rules"] == ["snort_signature:1:31978:5"]
     assert "suricata" not in second
 
 
@@ -607,25 +607,23 @@ def test_ids_output_is_each_engines_whole_record():
 
     # The rule's output fields and enrichment are in the file's rules, the
     # packet's fields with the packet; each engine's part keeps the rest. The
-    # SID, and the GID when it is 1, are in the rule's name; the timestamp is
-    # the packet's time in the engine's own format.
+    # GID, SID and revision are in the rule's name; the timestamp is the
+    # packet's time in the engine's own format.
     assert document["rules"] == {
-        "snort:31978": {
+        "snort_signature:1:31978:5": {
             "ids_output": {
                 "msg": "OS-OTHER Bash CGI environment variable injection attempt",
                 "class": "Attempted Administrator Privilege Gain",
                 "priority": 1,
-                "rev": 5,
             },
             "why_triggered": "It alerts when the HTTP headers contain `() {`.",
             "cves": ["CVE-2014-6271", "CVE-2014-7169"],
         },
-        "suricata:2019232": {
+        "suricata_signature:1:2019232:7": {
             "ids_output": {"alert": {
                 "signature": "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers",
                 "category": "Attempted Administrator Privilege Gain",
                 "severity": 1,
-                "rev": 7,
                 "metadata": {
                     "confidence": ["Medium"], "created_at": ["2014_09_25"],
                     "cve": ["CVE_2014_6271"],
@@ -678,7 +676,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "10.1"
+    assert document["schema_version"] == "11.0"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -692,7 +690,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
     assert no_ip_layer_packet == {
         "packet": 2,
         "time": "2026-10-15T15:51:00.000200+05:00",
-        "suricata": [{"rules": ["suricata:2200121"]}],
+        "suricata": [{"rules": ["suricata_signature:1:2200121:1"]}],
     }
     assert "suricata" not in request
     assert "snort" not in response
@@ -720,7 +718,7 @@ def test_non_ip_alerts_from_the_two_engines_are_not_combined():
     ])
 
     arp_packet, other = document["packets"]
-    assert arp_packet["snort"][0]["rules"] == ["snort:112:1"]
+    assert arp_packet["snort"][0]["rules"] == ["snort_signature:112:1:1"]
     assert "suricata" not in arp_packet
     assert "snort" not in other
 
@@ -761,14 +759,14 @@ def test_every_alert_is_listed_oldest_first():
         [rule for engine in ("snort", "suricata") for entry in packet.get(engine, []) for rule in entry["rules"]]
         for packet in packets
     ] == [
-        ["snort:51037"],
-        ["suricata:2027766"],
-        ["suricata:2027766"],
-        ["snort:51037"],
-        ["suricata:2027766"],
-        ["snort:31978"],
-        ["suricata:2019232"],
-        ["suricata:2210020"],
+        ["snort_signature:1:51037:1"],
+        ["suricata_signature:1:2027766:2"],
+        ["suricata_signature:1:2027766:2"],
+        ["snort_signature:1:51037:1"],
+        ["suricata_signature:1:2027766:2"],
+        ["snort_signature:1:31978:5"],
+        ["suricata_signature:1:2019232:7"],
+        ["suricata_signature:1:2210020:1"],
     ]
     # Each Windows Update connection uses a new client port.
     assert [packet["src"] for packet in _packets(document, "suricata")[:3]] == [
@@ -811,9 +809,9 @@ def test_rule_enrichment_is_given_once_per_file():
     )
 
     first, second = document["packets"]
-    assert first["snort"][0]["rules"] == second["snort"][0]["rules"] == ["snort:31978"]
-    assert list(document["rules"]) == ["snort:31978"]
-    assert document["rules"]["snort:31978"]["cves"] == ["CVE-2014-6271", "CVE-2014-7169"]
+    assert first["snort"][0]["rules"] == second["snort"][0]["rules"] == ["snort_signature:1:31978:5"]
+    assert list(document["rules"]) == ["snort_signature:1:31978:5"]
+    assert document["rules"]["snort_signature:1:31978:5"]["cves"] == ["CVE-2014-6271", "CVE-2014-7169"]
     # What differs per alert stays with the alert; the rule's message and
     # class, and any other field the same on both alerts, are given once,
     # with the rule.
@@ -842,9 +840,9 @@ def test_rule_names_keep_a_non_default_gid_and_split_revisions():
     )
 
     assert [packet["snort"][0]["rules"] for packet in document["packets"]] == [
-        ["snort:31978:rev5"], ["snort:116:408"], ["snort:31978:rev6"],
+        ["snort_signature:1:31978:5"], ["snort_signature:116:408:1"], ["snort_signature:1:31978:6"],
     ]
-    assert list(document["rules"]) == ["snort:116:408", "snort:31978:rev5", "snort:31978:rev6"]
+    assert list(document["rules"]) == ["snort_signature:116:408:1", "snort_signature:1:31978:5", "snort_signature:1:31978:6"]
 
 
 def test_file_is_written_indented():
@@ -919,8 +917,8 @@ def test_enrichment_holds_cve_and_technique_details_without_general_sentences():
         [_snort_row(), _suricata_row()], rule_intelligence=_full_intelligence
     )
 
-    snort_rule = _without_output(document["rules"]["snort:31978"])
-    suricata_rule = _without_output(document["rules"]["suricata:2019232"])
+    snort_rule = _without_output(document["rules"]["snort_signature:1:31978:5"])
+    suricata_rule = _without_output(document["rules"]["suricata_signature:1:2019232:7"])
     # Both rules name the Shellshock CVE; its details are given once.
     assert document["cves"] == {
         "CVE-2014-6271": {
@@ -978,17 +976,32 @@ SHELLSHOCK_RULE_TEXTS = {
 }
 
 
-def test_rule_text_is_given_without_web_link_references_or_metadata():
+def test_rule_text_is_given_only_on_request_without_web_link_references_or_metadata():
     def intelligence(engine, gid, sid, message):
         return {
             "explanation": {"why_triggered": f"{engine} rule logic"},
             "base_intelligence": {"rule": {"rule_text": SHELLSHOCK_RULE_TEXTS[sid]}},
         }
 
-    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
+    # The file sent to the LLM has no rule text: its SID would be a second
+    # name for the rule. The message stays in the rule's IDS output.
+    plain = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
+    assert "rule_text" not in json.dumps(plain)
+    assert plain["rules"]["snort_signature:1:31978:5"]["ids_output"]["msg"] == (
+        "OS-OTHER Bash CGI environment variable injection attempt"
+    )
+    assert plain["rules"]["suricata_signature:1:2019232:7"]["ids_output"]["alert"]["signature"] == (
+        "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers"
+    )
+    for packet, engine, entry, rule in _alerts(plain):
+        native = (_snort_native() if engine == "snort" else _suricata_native())
+        assert _full_output(plain, packet, engine, entry, rule) == native
 
-    snort_rule = _without_output(document["rules"]["snort:31978"])
-    suricata_rule = _without_output(document["rules"]["suricata:2019232"])
+    # The dashboard's alert view asks for it.
+    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence, rule_text=True)
+
+    snort_rule = _without_output(document["rules"]["snort_signature:1:31978:5"])
+    suricata_rule = _without_output(document["rules"]["suricata_signature:1:2019232:7"])
     # Everything else stays as the rule file writes it. The CVE references
     # are the rule's cves.
     assert snort_rule == {
@@ -1010,8 +1023,8 @@ def test_rule_text_is_given_without_web_link_references_or_metadata():
     )
     # The message and revision the rule text gives are not repeated in the
     # rule's IDS output; the alert's full output still rebuilds.
-    snort_output = document["rules"]["snort:31978"]["ids_output"]
-    suricata_output = document["rules"]["suricata:2019232"]["ids_output"]["alert"]
+    snort_output = document["rules"]["snort_signature:1:31978:5"]["ids_output"]
+    suricata_output = document["rules"]["suricata_signature:1:2019232:7"]["ids_output"]["alert"]
     assert not {"msg", "rev", "sid"} & set(snort_output)
     assert not {"signature", "rev", "signature_id"} & set(suricata_output)
     for packet, engine, entry, rule in _alerts(document):
@@ -1055,7 +1068,7 @@ def test_rule_documentation_is_given_on_one_line_without_repeats():
 
     # The details only repeat the description and impact; the vulnerability
     # type is given once, in the documentation.
-    assert _without_output(document["rules"]["snort:31978"]) == {
+    assert _without_output(document["rules"]["snort_signature:1:31978:5"]) == {
         "why_triggered": "snort rule logic",
         "documentation": {
             "description": (
@@ -1074,7 +1087,7 @@ def test_rule_documentation_is_given_on_one_line_without_repeats():
             },
         },
     }
-    assert "documentation" not in document["rules"]["suricata:2019232"]
+    assert "documentation" not in document["rules"]["suricata_signature:1:2019232:7"]
 
 
 def test_rule_documentation_written_on_one_line_is_split_into_its_parts():
@@ -1090,7 +1103,7 @@ def test_rule_documentation_written_on_one_line_is_split_into_its_parts():
         rule_intelligence=lambda *rule: {"base_intelligence": {"documentation": documentation}},
     )
 
-    assert document["rules"]["snort:31978"]["documentation"] == {
+    assert document["rules"]["snort_signature:1:31978:5"]["documentation"] == {
         "description": (
             "This event is generated when an attacker makes an HTTP request that "
             "contains '/etc/passwd' in the URI."
@@ -1123,7 +1136,7 @@ def test_rule_documentation_copied_from_nvd_is_left_to_the_cves():
 
     document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
 
-    snort_rule = document["rules"]["snort:31978"]
+    snort_rule = document["rules"]["snort_signature:1:31978:5"]
     # The description and impact copy the CVE's NVD summary and CVSS scores;
     # "N/A" is no vulnerability type.
     assert snort_rule["documentation"] == {
@@ -1148,7 +1161,7 @@ def test_alerts_on_the_same_packet_each_keep_their_full_output():
 
     packet, = document["packets"]
     entry, = packet["snort"]
-    assert entry["rules"] == ["snort:31978", "snort:50447"]
+    assert entry["rules"] == ["snort_signature:1:31978:5", "snort_signature:1:50447:1"]
     first, second = (
         _full_output(document, packet, "snort", entry, rule) for rule in entry["rules"]
     )
@@ -1471,18 +1484,19 @@ def test_a_rule_name_and_generic_sentences_are_not_repeated_in_the_rule():
 
     document = _build([_snort_row(builtin, event_ts_utc=1792061642700)], rule_intelligence=intelligence)
 
-    rule = document["rules"]["snort:116:408"]
+    rule = document["rules"]["snort_signature:116:408:1"]
     # GID and SID are in the name, and Snort's rule field is gid:sid:rev.
     assert not {"gid", "sid", "rule"} & set(rule["ids_output"])
-    # No rule text gives the message and revision.
-    assert (rule["ids_output"]["msg"], rule["ids_output"]["rev"]) == ("(ipv4) IPv4 option set", 1)
+    # The revision is in the name too; the message is the rule's.
+    assert "rev" not in rule["ids_output"]
+    assert rule["ids_output"]["msg"] == "(ipv4) IPv4 option set"
     assert rule["why_triggered"] == (
         "A built-in Snort rule: Snort's ipv4 component raised this event while "
         "decoding or inspecting the traffic."
     )
     packet, = document["packets"]
     entry, = packet["snort"]
-    assert _full_output(document, packet, "snort", entry, "snort:116:408") == ids_output("snort", builtin)
+    assert _full_output(document, packet, "snort", entry, "snort_signature:116:408:1") == ids_output("snort", builtin)
 
 
 def test_suricata_names_for_the_packets_protocol_and_addresses_are_not_repeated():
@@ -1592,7 +1606,7 @@ def test_several_rules_on_one_packet_stay_one_entry_when_one_rule_varies():
     for packet in (first, second):
         # The three alerts on one query are one entry: nothing in it twice.
         entry, = packet["snort"]
-        assert sorted(entry["rules"]) == ["snort:116:408", "snort:116:444", "snort:51037"]
+        assert sorted(entry["rules"]) == ["snort_signature:116:408:1", "snort_signature:116:444:1", "snort_signature:1:51037:1"]
     # What 116:444 does not share with the other two stays with the packet;
     # the query's flow gives it once.
     assert _places(document, "snort", ("flowstart_time",), 1792061400) == 1
