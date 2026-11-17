@@ -1213,7 +1213,6 @@ def alert_detail(
         window_end=moment,
         rule_intelligence=rule_intelligence,
         trim_to_window=False,
-        rule_text=True,
     )
     return {
         "alert": _listed(listed[alert_id], packet_uid, both),

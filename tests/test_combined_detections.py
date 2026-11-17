@@ -676,7 +676,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "11.0"
+    assert document["schema_version"] == "11.1"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -976,41 +976,26 @@ SHELLSHOCK_RULE_TEXTS = {
 }
 
 
-def test_rule_text_is_given_only_on_request_without_web_link_references_or_metadata():
+def test_rule_text_is_given_without_references_metadata_or_rule_numbers():
     def intelligence(engine, gid, sid, message):
         return {
             "explanation": {"why_triggered": f"{engine} rule logic"},
             "base_intelligence": {"rule": {"rule_text": SHELLSHOCK_RULE_TEXTS[sid]}},
         }
 
-    # The file sent to the LLM has no rule text: its SID would be a second
-    # name for the rule. The message stays in the rule's IDS output.
-    plain = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
-    assert "rule_text" not in json.dumps(plain)
-    assert plain["rules"]["snort_signature:1:31978:5"]["ids_output"]["msg"] == (
-        "OS-OTHER Bash CGI environment variable injection attempt"
-    )
-    assert plain["rules"]["suricata_signature:1:2019232:7"]["ids_output"]["alert"]["signature"] == (
-        "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers"
-    )
-    for packet, engine, entry, rule in _alerts(plain):
-        native = (_snort_native() if engine == "snort" else _suricata_native())
-        assert _full_output(plain, packet, engine, entry, rule) == native
-
-    # The dashboard's alert view asks for it.
-    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence, rule_text=True)
+    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
 
     snort_rule = _without_output(document["rules"]["snort_signature:1:31978:5"])
     suricata_rule = _without_output(document["rules"]["suricata_signature:1:2019232:7"])
     # Everything else stays as the rule file writes it. The CVE references
-    # are the rule's cves.
+    # are the rule's cves; the sid, gid and rev are in the rule's name.
     assert snort_rule == {
         "why_triggered": "snort rule logic",
         "rule_text": (
             'alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS ( msg:"OS-OTHER '
             'Bash CGI environment variable injection attempt"; '
             'flow:to_server,established; http_header; content:"() {",fast_pattern,'
-            'nocase; service:http; classtype:attempted-admin; sid:31978; rev:5; )'
+            'nocase; service:http; classtype:attempted-admin; )'
         ),
         "cves": ["CVE-2014-6271", "CVE-2014-6277", "CVE-2014-6278", "CVE-2014-7169"],
     }
@@ -1019,7 +1004,7 @@ def test_rule_text_is_given_only_on_request_without_web_link_references_or_metad
         'alert http any any -> $HTTP_SERVERS any (msg:"ET WEB_SERVER Possible '
         'CVE-2014-6271 Attempt in Headers"; flow:established,to_server; '
         'http.header; content:"|28 29 20 7b|"; fast_pattern; content:"bash|20 2d|c"; '
-        'classtype:attempted-admin; sid:2019232; rev:7;)'
+        'classtype:attempted-admin;)'
     )
     # The message and revision the rule text gives are not repeated in the
     # rule's IDS output; the alert's full output still rebuilds.
@@ -1787,3 +1772,12 @@ def test_a_field_the_engine_wrote_as_null_is_never_a_default():
         for packet, engine, entry, rule in _alerts(document)
     )
     assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
+
+
+def test_rule_text_leaves_out_the_rule_numbers_its_name_gives():
+    from ids.combined_detections import _rule_text
+
+    assert _rule_text(
+        'alert tcp any any -> any any (msg:"x"; content:"sid:1;"; gid:1; sid:9; rev:3; '
+        'classtype:misc-activity;)'
+    ) == 'alert tcp any any -> any any (msg:"x"; content:"sid:1;"; classtype:misc-activity;)'
