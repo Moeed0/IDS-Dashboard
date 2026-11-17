@@ -261,19 +261,32 @@ itself, from the same threat-intelligence database, which the dashboard
 offers at `/intel/intel.db` (about 1.4 GB: NVD, EPSS, CISA KEV and MITRE
 ATT&CK; `/intel` says what each source's data is as of).
 
-On the LLM PC, `scripts/intel_lookup.py` (standard library only) fetches it
-and looks up what a file names:
+Talos's documentation of Snort's rules (3,945 rules, from the local copy
+`data/json/rule_docs_preprocessed_by_sid.json`) is in the database too, in
+`talos_rule_docs` by GID and SID; ET Open's Suricata rules have none.
+
+On the LLM PC, `scripts/intel_lookup.py` (standard library only) fetches the
+database and writes what it says of a file as plain text, to put in the
+LLM's prompt:
 
     python intel_lookup.py download http://172.16.20.142:8501/
     python intel_lookup.py enrich snort_suricata_combined_….json
-    python intel_lookup.py lookup CVE-2014-6271 T1190
+    python intel_lookup.py lookup snort_signature:1:31978:5 CVE-2014-6271 T1190
 
-`enrich` finds every CVE the file names (a rule text's
-`reference:cve,2014-6271`, Suricata's metadata `CVE_2014_6271`, a message's
-`CVE-2020-11899`) and every ATT&CK technique (Suricata's
-`mitre_technique_id`), and prints what the database holds on each: the NVD
-summary, publication date, CVSS, CWEs, EPSS and the CISA KEV entry; a
-technique's name, tactics, platforms and description.
+or, from a program, `prompt_text(db, combined_json)`. It finds every rule the
+file names and the CVEs (a rule text's `reference:cve,2014-6271`, Suricata's
+metadata `CVE_2014_6271`, a message's `CVE-2020-11899`) and ATT&CK
+techniques (Suricata's `mitre_technique_id`) it names, plus those a rule's
+Talos documentation names, and gives:
+
+- a Snort rule's Talos documentation: category (described once), description,
+  impact, details, ease of attack, what to look for, false positives, known
+  usage, vulnerability type, CVEs and technique; the parts that repeat
+  another or copy a CVE's NVD summary or scores are left out;
+- a CVE's NVD summary, publication date, CVSS, CWEs, EPSS and CISA KEV entry;
+- a technique's name, tactics, platforms and description.
+
+`--json` prints the same as JSON.
 
 The dashboard's own alert view still shows the enrichment for a person
 reading one alert.

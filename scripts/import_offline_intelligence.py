@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import re
 import sqlite3
 import tempfile
@@ -22,6 +23,32 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from ids.offline_intelligence import DEFAULT_DB_PATH, SCHEMA_SQL
+
+# Talos's documentation of Snort's rules (the local copy, by SID). It goes
+# in the database so that the LLM PC, which fetches the database, has it.
+DEFAULT_RULE_DOCS_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "json" / "rule_docs_preprocessed_by_sid.json"
+)
+RULE_DOCS_SQL = """
+DROP TABLE IF EXISTS talos_rule_docs;
+CREATE TABLE talos_rule_docs (
+    gid INTEGER NOT NULL,
+    sid INTEGER NOT NULL,
+    rev INTEGER,
+    msg TEXT,
+    url TEXT,
+    category TEXT,
+    explanation TEXT,
+    what_to_look_for TEXT,
+    false_positives TEXT,
+    known_usage TEXT,
+    vulnerability TEXT,
+    cve_ids TEXT,
+    mitre_technique_id TEXT,
+    contributors TEXT,
+    PRIMARY KEY (gid, sid)
+);
+"""
 
 
 CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
@@ -645,6 +672,82 @@ def _write_source_metadata(
     )
 
 
+def _number(value: Any) -> int | None:
+    text = str(value if value is not None else "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _import_rule_docs(connection: sqlite3.Connection, path: Path) -> int:
+    """Talos's documentation of each Snort rule it documents, in
+    talos_rule_docs; the rules it has no page for are left out."""
+    documents = json.loads(path.read_text(encoding="utf-8"))
+    connection.executescript(RULE_DOCS_SQL)
+    rows = [
+        (
+            _number(doc.get("gid")) or 1,
+            _number(doc.get("sid")),
+            _number(doc.get("rev")),
+            doc.get("msg"),
+            doc.get("doc_url"),
+            doc.get("rule_category"),
+            doc.get("rule_explanation"),
+            doc.get("what_to_look_for"),
+            doc.get("false_positives"),
+            doc.get("known_usage"),
+            doc.get("rule_vulnerability"),
+            doc.get("cve_ids"),
+            doc.get("mitre_id"),
+            doc.get("contributors"),
+        )
+        for doc in documents.values()
+        if str(doc.get("doc_found")) == "1" and _number(doc.get("sid")) is not None
+    ]
+    connection.executemany(
+        f"INSERT OR REPLACE INTO talos_rule_docs VALUES ({', '.join('?' * 14)})", rows
+    )
+    count = connection.execute("SELECT COUNT(*) FROM talos_rule_docs").fetchone()[0]
+    as_of = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).date().isoformat()
+    _write_source_metadata(connection, "talos_rule_docs", as_of, None, count, [path])
+    return count
+
+
+def add_rule_docs(
+    database: str | Path = DEFAULT_DB_PATH,
+    rule_docs_path: str | Path = DEFAULT_RULE_DOCS_PATH,
+) -> dict[str, Any]:
+    """Talos's rule documentation put in an existing database (replacing what
+    it had of it): on a copy, which then replaces the database whole, so a
+    reader or download in progress keeps the old one."""
+    target = Path(database).expanduser().resolve()
+    docs = Path(rule_docs_path).expanduser().resolve()
+    if not target.is_file():
+        raise FileNotFoundError(f"Database does not exist: {target}")
+    if not docs.is_file():
+        raise FileNotFoundError(f"Input file does not exist: {docs}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        shutil.copyfile(target, temporary)
+        shutil.copymode(target, temporary)
+        connection = sqlite3.connect(temporary)
+        try:
+            count = _import_rule_docs(connection, docs)
+            connection.commit()
+            check = connection.execute("PRAGMA quick_check").fetchone()[0]
+            if check != "ok":
+                raise sqlite3.DatabaseError(f"Staged database check failed: {check}")
+        finally:
+            connection.close()
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return {"database": str(target), "counts": {"talos_rule_docs": count}}
+
+
 def import_sources(
     *,
     nvd_paths: list[str | Path],
@@ -653,6 +756,7 @@ def import_sources(
     mitre_path: str | Path,
     output_path: str | Path = DEFAULT_DB_PATH,
     replace: bool = False,
+    rule_docs_path: str | Path | None = DEFAULT_RULE_DOCS_PATH,
 ) -> dict[str, Any]:
     """Build a validated database from local files and atomically publish it."""
     target = Path(output_path).expanduser().resolve()
@@ -720,6 +824,11 @@ def import_sources(
                 connection, "mitre_attack", date, version, counts["mitre_attack"], [mitre_file]
             )
 
+            if rule_docs_path is not None and Path(rule_docs_path).is_file():
+                counts["talos_rule_docs"] = _import_rule_docs(
+                    connection, Path(rule_docs_path).expanduser().resolve()
+                )
+
             connection.commit()
 
             check = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -752,19 +861,30 @@ def main() -> None:
         )
     )
     parser.add_argument(
+        "--add-rule-docs",
+        action="store_true",
+        help=(
+            "Only put Talos's rule documentation (--rule-docs) in the existing "
+            "database at --output; the other sources are kept."
+        ),
+    )
+    parser.add_argument(
+        "--rule-docs",
+        default=str(DEFAULT_RULE_DOCS_PATH),
+        help="Talos's rule documentation, by SID (default: data/json/rule_docs_preprocessed_by_sid.json).",
+    )
+    parser.add_argument(
         "--nvd-path",
         action="append",
-        required=True,
         help="NVD JSON, JSON.GZ or ZIP file, or directory (repeatable).",
     )
     parser.add_argument(
         "--epss-csv",
         action="append",
-        required=True,
         help="EPSS CSV or CSV.GZ file, or directory (repeatable).",
     )
-    parser.add_argument("--kev-json", required=True, help="Local CISA KEV JSON file.")
-    parser.add_argument("--mitre-json", required=True, help="Local ATT&CK STIX JSON file.")
+    parser.add_argument("--kev-json", help="Local CISA KEV JSON file.")
+    parser.add_argument("--mitre-json", help="Local ATT&CK STIX JSON file.")
     parser.add_argument(
         "--output",
         default=str(DEFAULT_DB_PATH),
@@ -777,6 +897,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.add_rule_docs:
+        print(json.dumps(add_rule_docs(args.output, args.rule_docs), indent=2))
+        return
+    missing = [
+        option for option, value in (
+            ("--nvd-path", args.nvd_path), ("--epss-csv", args.epss_csv),
+            ("--kev-json", args.kev_json), ("--mitre-json", args.mitre_json),
+        ) if not value
+    ]
+    if missing:
+        parser.error(f"the following arguments are required: {', '.join(missing)}")
     result = import_sources(
         nvd_paths=args.nvd_path,
         epss_paths=args.epss_csv,
@@ -784,6 +915,7 @@ def main() -> None:
         mitre_path=args.mitre_json,
         output_path=args.output,
         replace=args.replace,
+        rule_docs_path=args.rule_docs,
     )
     print(json.dumps(result, indent=2))
 

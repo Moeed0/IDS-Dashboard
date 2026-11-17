@@ -100,8 +100,10 @@ network interface (afpacket)
   saves each file in a folder (copy it there and run
   `python llm_receiver.py`; standard library only); the old alerts' zips
   are at the bottom. The file has no enrichment: the LLM PC fetches the
-  threat-intel database from the dashboard (`/intel/intel.db`) and looks up
-  each file's CVEs and ATT&CK techniques with `scripts/intel_lookup.py`
+  threat-intel database from the dashboard (`/intel/intel.db`: NVD, EPSS,
+  CISA KEV, MITRE ATT&CK and Talos's Snort rule documentation) and writes
+  what it says of each file's rules, CVEs and ATT&CK techniques as text for
+  the LLM's prompt with `scripts/intel_lookup.py`
   (`python intel_lookup.py download http://<dashboard>:8501/`, then
   `python intel_lookup.py enrich <file>.json`; standard library only).
 
