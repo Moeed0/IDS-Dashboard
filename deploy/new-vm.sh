@@ -15,7 +15,7 @@
 #     --no-system: .venv, .env, the page, the rule index), with
 #     IDS_INTERFACE and the hourly test alert's target (the card's
 #     gateway) set in .env;
-#  4. the capture card's name kept and its offloads off
+#  4. the capture card's name kept, its offloads off, and no DNS from it
 #     (deploy/pin-capture-interface.sh);
 #  5. the rules: ET Open for Suricata, the registered rules, their SO rules
 #     and the OpenAppID detectors for Snort (deploy/update-rules.sh), and the
@@ -134,6 +134,15 @@ deploy/pin-capture-interface.sh | grep -v "change the card" || true
 for offload in gro lro tso gso rx tx; do
     ethtool -K "$iface" "$offload" off 2> /dev/null || true
 done
+# The VM looks names up through its other cards, not the watched network: the
+# lab router refuses DNS, and each refused lookup of the VM's own was two
+# alerts about the sensor itself (ET 2002752 and 2001119, 8,000 an hour).
+profile="$(nmcli -g GENERAL.CONNECTION device show "$iface" 2> /dev/null || true)"
+if [[ -n $profile ]]; then
+    nmcli connection modify "$profile" ipv4.ignore-auto-dns yes ipv6.ignore-auto-dns yes
+    nmcli device reapply "$iface" > /dev/null
+    echo "   $iface: no DNS from the watched network ($profile)"
+fi
 
 echo "== 5. Rules"
 # The update checks the new Snort rules with the config in use (here still
