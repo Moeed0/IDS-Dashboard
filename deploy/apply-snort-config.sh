@@ -5,7 +5,7 @@
 # live config, validates the new one, and restarts Snort only if validation
 # passes; restores the backup if either step fails. It also installs
 # snort-lab's drop-in (afpacket, and --plugin-path for the shared-object
-# rules). The SO rules and the OpenAppID detectors it loads come first, from
+# rules), with IDS_INTERFACE from .env as the capture card. The SO rules and the OpenAppID detectors it loads come first, from
 # sudo deploy/update-rules.sh.
 set -euo pipefail
 
@@ -24,13 +24,27 @@ for needed in "$SO_RULES" "$DETECTORS"; do
     fi
 done
 
-echo "== Installing snort-lab's drop-in"
-sudo install -D -m 0644 "$PROJECT_DIR/deploy/systemd/snort-lab.service.d/daq-afpacket.conf" \
-    /etc/systemd/system/snort-lab.service.d/daq-afpacket.conf
+# The capture card: IDS_INTERFACE in .env (the files in the repository say
+# ens38, this lab's first VM).
+IFACE="$(grep -E '^IDS_INTERFACE=' "$PROJECT_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+IFACE="${IFACE:-ens38}"
+
+echo "== Installing snort-lab and its drop-in, capturing on $IFACE"
+sed "s/-i ens38 /-i $IFACE /" "$PROJECT_DIR/deploy/systemd/snort-lab.service" \
+    | sudo tee /etc/systemd/system/snort-lab.service > /dev/null
+sudo install -d /etc/systemd/system/snort-lab.service.d
+sed "s/-i ens38 /-i $IFACE /" "$PROJECT_DIR/deploy/systemd/snort-lab.service.d/daq-afpacket.conf" \
+    | sudo tee /etc/systemd/system/snort-lab.service.d/daq-afpacket.conf > /dev/null
+sudo install -d /var/log/snort
 sudo systemctl daemon-reload
 
 echo "== Backing up $LIVE_CONFIG to $BACKUP"
 sudo cp "$LIVE_CONFIG" "$BACKUP"
+# The local rules file snort.lua includes; deploy/install-local-rules.sh
+# fills it.
+if [ ! -e /usr/local/etc/snort/local.rules ]; then
+    sudo touch /usr/local/etc/snort/local.rules
+fi
 
 echo "== Installing $NEW_CONFIG"
 sudo install -m 0644 "$NEW_CONFIG" "$LIVE_CONFIG"
@@ -44,7 +58,8 @@ if ! sudo snort -c "$LIVE_CONFIG" --plugin-path "$SO_RULES" -T > /tmp/snort-conf
 fi
 grep -E "total rules loaded|successfully validated" /tmp/snort-config-test.log
 
-echo "== Restarting $SERVICE"
+echo "== Restarting $SERVICE (and starting it at boot)"
+sudo systemctl enable --quiet "$SERVICE"
 sudo systemctl restart "$SERVICE"
 sleep 8
 if ! systemctl is-active --quiet "$SERVICE"; then

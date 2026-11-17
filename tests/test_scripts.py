@@ -1,4 +1,5 @@
 import io
+import urllib.error
 
 import pytest
 
@@ -59,3 +60,36 @@ def test_a_short_nvd_download_is_an_error(tmp_path, monkeypatch):
         download.download_nvd(tmp_path, [2002])
     # The feed's .meta is saved only with a complete download.
     assert not (tmp_path / "nvdcve-2.0-2002.meta").exists()
+
+
+def test_a_year_nvd_does_not_serve_is_left_out(tmp_path, monkeypatch, capsys):
+    """NVD's 2025 feed was a 404 on 17 Nov 2026 while its .meta was there."""
+    asked = _fake_site(monkeypatch)
+    fake = download._open
+
+    def answer(url):
+        if url.endswith("2003.json.gz"):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        return fake(url)
+
+    monkeypatch.setattr(download, "_open", answer)
+    assert download.download_nvd(tmp_path, [2002, 2003]) == ["2003"]
+    assert (tmp_path / "nvdcve-2.0-2002.json.gz").is_file()
+    assert not (tmp_path / "nvdcve-2.0-2003.json.gz").exists()
+    assert not (tmp_path / "nvdcve-2.0-2003.meta").exists()
+    assert "nvdcve-2.0-modified.json.gz" in asked
+    assert "NVD 2003: not on NVD's server now (HTTP 404), left out" in capsys.readouterr().out
+
+
+def test_a_missing_modified_nvd_feed_is_still_an_error(tmp_path, monkeypatch):
+    _fake_site(monkeypatch)
+    fake = download._open
+
+    def answer(url):
+        if url.endswith("modified.json.gz"):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        return fake(url)
+
+    monkeypatch.setattr(download, "_open", answer)
+    with pytest.raises(urllib.error.HTTPError):
+        download.download_nvd(tmp_path, [2002])

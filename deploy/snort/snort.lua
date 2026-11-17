@@ -32,7 +32,10 @@ include 'snort_defaults.lua'
 -- Official Snort Registered Ruleset
 -- This lab's registered rules; on another machine, where the README unpacks
 -- them: /usr/local/etc/snort/registered/rules
-RULE_PATH = '/home/moeed824/snort-registered-test/rules'
+RULE_PATH = '/usr/local/etc/snort/registered/rules'
+-- snort_defaults.lua copied its own RULE_PATH ('../rules') into
+-- default_variables, which the ips rules below read: this one replaces it.
+default_variables.paths.RULE_PATH = RULE_PATH
 
 ---------------------------------------------------------------------------
 -- 2. configure inspection
@@ -213,7 +216,7 @@ ips =
     -- (deploy/rules/local.rules, installed by deploy/install-local-rules.sh).
     rules = [[
         include $RULE_PATH/includes.rules
-        include /home/moeed824/snort-registered-test/so_rules/includes.rules
+        include /usr/local/etc/snort/registered/so_rules/includes.rules
         include /usr/local/etc/snort/local.rules
     ]],
     variables = default_variables

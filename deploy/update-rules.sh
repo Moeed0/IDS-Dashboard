@@ -217,5 +217,5 @@ fi
 runuser -u "$owner" -- env PYTHONPATH=src .venv/bin/python src/ids/build_rule_index.py > /dev/null \
     || echo "!! The rule index wasn't rebuilt; run src/ids/build_rule_index.py later." >&2
 # It reads the counts when it starts.
-systemctl try-restart ids-dashboard
+systemctl try-restart ids-dashboard 2> /dev/null || true  # not installed yet on a new machine
 exit "$failed"

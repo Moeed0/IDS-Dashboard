@@ -120,6 +120,18 @@ network interface (afpacket)
 
 ## Setting up a machine
 
+**A fresh Ubuntu VM, as this lab:** `deploy/new-vm.sh` does every step
+below in one run: it installs Suricata and the packages, builds Snort 3
+from source, fetches both engines' rules (it asks for your oinkcode), puts
+this lab's engine settings in, and runs `./setup.sh --with-intel`. Clone the
+repository as your user, find the card to watch with `ip -br link`, then:
+
+```bash
+sudo deploy/new-vm.sh --interface ens34
+```
+
+The steps by hand:
+
 This repository holds the dashboard: the collector, the API and the page.
 The engines and their rules come from their makers, so set those up first.
 It is tested on Ubuntu with Python 3.13, and with Node.js 22 to build the
@@ -228,7 +240,8 @@ Neither rule set is in this repository; each comes from its maker.
   ```
 
 - **This lab's Suricata settings** (alert payloads as text, pcap files of the
-  alerted flows, the Conficker P2P rules off, logs closed to other users):
+  alerted flows, capture on `IDS_INTERFACE` with HOME_NET `any`, logs closed
+  to other users):
 
   ```bash
   sudo deploy/apply-suricata-settings.sh

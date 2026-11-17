@@ -5,11 +5,16 @@
 #     sudo deploy/apply-suricata-settings.sh
 #
 # - Alerts keep what was sent: the payload and the HTTP body as text
-#   (payload-printable, http-body-printable).
+#   (payload-printable, http-body-printable), and the raw packet (packet).
 # - The packets of the flows that raised alerts are kept as pcap files in
 #   /var/log/suricata (pcap-log, conditional: alerts): 10 files of 100 MiB at
 #   most, the oldest going first.
-# - The Conficker P2P rules are off (deploy/suricata/disable.conf).
+# - Every ET rule on, every match logged (deploy/suricata/enable.conf,
+#   disable.conf and modify.conf, copied to /etc/suricata/).
+# - The capture card is IDS_INTERFACE in .env (af-packet's first entry), and
+#   HOME_NET and EXTERNAL_NET are "any", so every rule applies whichever way
+#   the traffic goes (deploy/suricata/modify.conf fixes the 7 ET rules that
+#   need it).
 # - Two capture threads on the capture card, not one per CPU ("auto": 8).
 #   Each thread keeps its own copy of the rules' match state, and this lab's
 #   traffic is a few packets a second: more threads only cost memory, which
@@ -18,8 +23,8 @@
 #   this folder's owner (the collector and the dashboard) may read them too.
 #
 # suricata.yaml is backed up and the new one checked with suricata -T; the
-# old one comes back if the check fails. Then the rules are updated without
-# the Conficker ones and Suricata is restarted (output settings need it).
+# old one comes back if the check fails. Then the rules are updated with
+# those selections and Suricata is restarted (output settings need it).
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -31,18 +36,33 @@ owner="$(stat -c %U "$repo_dir")"
 config=/etc/suricata/suricata.yaml
 logs=/var/log/suricata
 backup="$config.bak-$(date +%Y%m%d-%H%M%S)"
+iface="$(grep -E '^IDS_INTERFACE=' "$repo_dir/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+iface="${iface:-ens38}"
+if [[ ! -e /sys/class/net/$iface ]]; then
+    echo "!! There's no interface $iface (IDS_INTERFACE in .env)" >&2
+    exit 1
+fi
 
 echo "== Backing up $config to $backup"
 cp -p "$config" "$backup"
 
-echo "== Alert payloads as text, and pcap files of the alerted flows"
-python3 - "$config" <<'PYTHON'
+echo "== Capture on $iface, HOME_NET any; alert payloads as text, and pcap files of the alerted flows"
+python3 - "$config" "$iface" <<'PYTHON'
 import re
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+iface = sys.argv[2]
 lines = path.read_text().splitlines(keepends=True)
+
+# HOME_NET and EXTERNAL_NET under vars: address-groups: both "any".
+for name in ("HOME_NET", "EXTERNAL_NET"):
+    index = next((i for i, line in enumerate(lines) if re.match(rf"^\s+{name}:", line)), None)
+    if index is None:
+        sys.exit(f"!! no {name} line in {path}")
+    lead = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+    lines[index] = f'{lead}{name}: "any"\n'
 
 def uncomment(pattern):
     """The commented-out option the pattern names, switched on; already on is fine."""
@@ -57,6 +77,9 @@ def uncomment(pattern):
 
 uncomment(r"payload-printable: yes")
 uncomment(r"http-body-printable: yes")
+# The raw packet (Base64) of each alert: its IP and TCP/ICMP header values
+# tell which Snort alert is on the same packet (the combined export).
+uncomment(r"packet: yes")
 
 # The pcap-log block: from "- pcap-log:" to the next output at its indent.
 start = next(i for i, line in enumerate(lines) if re.match(r"^\s*- pcap-log:", line))
@@ -84,6 +107,7 @@ if wanted:
 section = next(i for i, line in enumerate(lines) if re.match(r"^af-packet:", line))
 card = next(i for i in range(section + 1, len(lines)) if re.match(r"^\s*- interface:", lines[i]))
 card_indent = len(lines[card]) - len(lines[card].lstrip())
+lines[card] = f"{lines[card][:card_indent]}- interface: {iface}\n"
 for index in range(card + 1, len(lines)):
     line = lines[index]
     if line.strip() and not line.lstrip().startswith("#") \
@@ -107,8 +131,10 @@ if ! suricata -T -c "$config" -S /dev/null -l "$test_dir" > "$test_dir/test.log"
 fi
 rm -rf "$test_dir"
 
-echo "== The Conficker P2P rules off"
-install -m 0644 "$repo_dir/deploy/suricata/disable.conf" /etc/suricata/disable.conf
+echo "== The rule selections (enable.conf, disable.conf, modify.conf)"
+for file in enable.conf disable.conf modify.conf; do
+    install -m 0644 "$repo_dir/deploy/suricata/$file" "/etc/suricata/$file"
+done
 # --no-test: with HOME_NET "any" its test fails and it would keep the old rules.
 suricata-update --no-test --quiet
 
@@ -139,5 +165,5 @@ runuser -u "$owner" -- .venv/bin/python scripts/save_rule_counts.py --suricata-l
     || echo "!! The rule count wasn't saved; run scripts/save_rule_counts.py --suricata-log later." >&2
 runuser -u "$owner" -- env PYTHONPATH=src .venv/bin/python src/ids/build_rule_index.py > /dev/null \
     || echo "!! The rule index wasn't rebuilt; run src/ids/build_rule_index.py later." >&2
-systemctl try-restart ids-dashboard
+systemctl try-restart ids-dashboard 2> /dev/null || true  # not installed yet on a new machine
 echo "== Done. The old settings: $backup"

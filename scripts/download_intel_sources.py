@@ -12,7 +12,10 @@ with scripts/import_offline_intelligence.py:
     .venv/bin/python scripts/download_intel_sources.py --build
 
 About 300 MB of downloads, and a database of about 1.6 GB. An NVD year whose
-feed has not changed since the last download is not downloaded again. Each
+feed has not changed since the last download is not downloaded again; a
+year whose feed NVD isn't serving (HTTP 404, as for 2025 on 17 Nov 2026,
+while its .meta was there) is left out with a warning, keeping the copy from
+an earlier download if there is one, and the next run fetches it. Each
 file is written under a temporary name first, so a stopped download leaves
 no half file behind.
 """
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import urllib.error
 import urllib.request
 from datetime import date
 from pathlib import Path
@@ -62,7 +66,9 @@ def read_meta(text: str) -> dict[str, str]:
     return dict(line.split(":", 1) for line in text.splitlines() if ":" in line)
 
 
-def download_nvd(folder: Path, years: list[int]) -> None:
+def download_nvd(folder: Path, years: list[int]) -> list[str]:
+    """Each year's feed and the modified one; the years NVD didn't serve."""
+    missing = []
     for name in [*map(str, years), "modified"]:
         feed = folder / f"nvdcve-2.0-{name}.json.gz"
         meta_file = folder / f"nvdcve-2.0-{name}.meta"
@@ -77,17 +83,26 @@ def download_nvd(folder: Path, years: list[int]) -> None:
         ):
             print(f"  NVD {name}: unchanged")
             continue
-        size = fetch(NVD_FEED.format(name=name, suffix="json.gz"), feed)
+        try:
+            size = fetch(NVD_FEED.format(name=name, suffix="json.gz"), feed)
+        except urllib.error.HTTPError as error:
+            if error.code != 404 or name == "modified":
+                raise
+            kept = " (the earlier download is kept)" if feed.is_file() else ""
+            print(f"  NVD {name}: not on NVD's server now (HTTP 404), left out{kept}")
+            missing.append(name)
+            continue
         if str(size) != meta.get("gzSize"):
             raise RuntimeError(f"NVD {name}: got {size} bytes, the feed says {meta.get('gzSize')}")
         meta_file.write_text(meta_text, encoding="utf-8")
         print(f"  NVD {name}: {size / 1e6:.1f} MB")
+    return missing
 
 
 def download(folder: Path, years: list[int]) -> dict[str, Path]:
     """Every source into folder; where each one is, for the import."""
     print(f"Downloading into {folder}")
-    download_nvd(folder / "nvd", years)
+    missing = download_nvd(folder / "nvd", years)
     paths = {
         "epss": folder / "epss" / "epss_scores-current.csv.gz",
         "kev": folder / "kev" / "known_exploited_vulnerabilities.json",
@@ -95,6 +110,8 @@ def download(folder: Path, years: list[int]) -> dict[str, Path]:
     }
     for name, url in (("epss", EPSS_URL), ("kev", KEV_URL), ("mitre", MITRE_URL)):
         print(f"  {name.upper()}: {fetch(url, paths[name]) / 1e6:.1f} MB")
+    if missing:
+        print(f"  Left out: NVD {', '.join(missing)}. Run this again later to add them.")
     return {"nvd": folder / "nvd", **paths}
 
 
