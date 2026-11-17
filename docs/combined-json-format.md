@@ -268,8 +268,10 @@ from files on the IDS machine:
   local copy `data/json/rule_docs_preprocessed_by_sid.json` (3,945 rules),
   and from `data/intel/sources/talos/rule_docs.jsonl`, where
   `scripts/download_talos_docs.py` saves the snort.org page of every rule in
-  the registered snapshot (about 52,700 text and SO rules) once: one page a
-  second, waiting when snort.org says too many (HTTP 429), so about a day.
+  the registered snapshot (about 52,700 text and SO rules; the 4,017 the
+  local copy has are skipped) once, one page at a time at the pace
+  snort.org allows (about ten a minute, so three to four days; it slows down
+  when snort.org answers HTTP 429).
   Run it once, again if it stops, and after a rule update to fetch only the
   new rules:
 
