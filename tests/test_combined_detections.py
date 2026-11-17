@@ -237,6 +237,24 @@ def _alerts(document, engine=None):
     ]
 
 
+def _places(document, engine, path, value):
+    """How many places in the file store value at path for engine: its
+    engine-wide defaults, a rule, a flow, a packet's shared part or an entry."""
+    parts = [document.get("ids_output", {}).get(engine, {})]
+    parts += [rule.get("ids_output", {}) for name, rule in document.get("rules", {}).items()
+              if name.startswith(engine + ":")]
+    parts += [flow.get(engine, {}) for flow in document.get("flows", {}).values()]
+    for packet in document["packets"]:
+        parts.append(packet.get("ids_output", {}).get(engine, {}))
+        parts += [entry.get("ids_output", {}) for entry in packet.get(engine, [])]
+    found = 0
+    for part in parts:
+        for key in path:
+            part = part.get(key) if isinstance(part, dict) else None
+        found += part == value
+    return found
+
+
 def _without_output(rule):
     return {key: value for key, value in rule.items() if key != "ids_output"}
 
@@ -660,7 +678,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "10.0"
+    assert document["schema_version"] == "10.1"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -801,10 +819,10 @@ def test_rule_enrichment_is_given_once_per_file():
     # with the rule.
     assert first["snort"][0]["ids_output"] == {"pkt_len": 109}
     assert second["snort"][0]["ids_output"] == {"pkt_len": 120}
-    rule_output = document["rules"]["snort:31978"]["ids_output"]
-    assert rule_output["class"] == "Attempted Administrator Privilege Gain"
+    # The same on both alerts, so stored once, wherever it fits best.
+    assert _places(document, "snort", ("class",), "Attempted Administrator Privilege Gain") == 1
     # The same on every Snort alert in the file: given once, for the engine.
-    assert document["ids_output"]["snort"]["flowstart_time"] == 1792061642
+    assert _places(document, "snort", ("flowstart_time",), 1792061642) == 1
 
 
 def test_rule_names_keep_a_non_default_gid_and_split_revisions():
@@ -1423,13 +1441,12 @@ def test_what_is_the_same_on_every_alert_of_a_connection_is_given_once():
 
     _, first, second = document["packets"]
     assert first["flow"] == second["flow"] == 1
-    flow = document["flows"]["1"]["suricata"]
-    assert flow["community_id"] == "1:VtLM8w9QQw/rxKkhooBa20VkAO0="
-    # Every Suricata alert in the file goes to the server: said once, for the engine.
-    assert document["ids_output"]["suricata"]["direction"] == "to_server"
-    assert flow["flow"]["start"] == "2026-10-15T15:54:02.659143+0500"
-    # Suricata's flow addresses and ports are the packet's: not repeated.
-    assert not {"src_ip", "dest_ip", "src_port", "dest_port"} & set(flow["flow"])
+    # What the connection's alerts share is stored once.
+    assert _places(document, "suricata", ("community_id",), "1:VtLM8w9QQw/rxKkhooBa20VkAO0=") == 1
+    assert _places(document, "suricata", ("direction",), "to_server") == 1
+    assert _places(document, "suricata", ("flow", "start"), "2026-10-15T15:54:02.659143+0500") == 1
+    # Suricata's flow addresses are the packet's: not stored at all.
+    assert _places(document, "suricata", ("flow", "src_ip"), "192.168.50.141") == 0
     assert "community_id" not in first["suricata"][0].get("ids_output", {})
     assert second["suricata"][0]["ids_output"] == {"flow": {"pkts_toserver": packets_to_server}}
     rebuilt = sorted(
@@ -1578,10 +1595,10 @@ def test_several_rules_on_one_packet_stay_one_entry_when_one_rule_varies():
         assert sorted(entry["rules"]) == ["snort:116:408", "snort:116:444", "snort:51037"]
     # What 116:444 does not share with the other two stays with the packet;
     # the query's flow gives it once.
-    assert document["flows"]["1"]["snort"]["flowstart_time"] == 1792061400
-    assert first["snort"][0]["ids_output"] == {
-        "client_bytes": 210240, "client_pkts": 3504, "pkt_num": 100,
-    }
+    assert _places(document, "snort", ("flowstart_time",), 1792061400) == 1
+    # The first query's own counts and packet number, stored once each.
+    for path, value in ((("client_bytes",), 210240), (("client_pkts",), 3504), (("pkt_num",), 100)):
+        assert _places(document, "snort", path, value) == 1
     rebuilt = sorted(
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)
@@ -1699,6 +1716,58 @@ def test_what_every_alert_of_an_engine_shares_is_given_once_for_the_file():
     for _, engine, entry, _ in _alerts(document):
         assert not {"iface", "event_type"} & set(entry.get("ids_output", {}))
         assert "action" not in entry.get("ids_output", {}).get("alert", {})
+    rebuilt = sorted(
+        json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
+        for packet, engine, entry, rule in _alerts(document)
+    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
+
+
+def test_a_value_most_alerts_share_is_stored_once_and_its_absence_is_null():
+    # Two alerts with Suricata's pcap file, one without it: the file is
+    # given once, and the alert that has none says so with null.
+    with_file = [
+        _suricata_native(capture_file="/var/log/suricata/log.pcap.1"),
+        _suricata_native(
+            capture_file="/var/log/suricata/log.pcap.1", timestamp="2026-10-15T15:54:02.690000+0500",
+        ),
+    ]
+    without = _suricata_igmp_row()
+    rows = [
+        _suricata_row(with_file[0]),
+        _suricata_row(with_file[1], event_ts_utc=1792061642690),
+        _suricata_row(_suricata_native(
+            capture_file="/var/log/suricata/log.pcap.1", timestamp="2026-10-15T15:54:02.695000+0500",
+        ), event_ts_utc=1792061642695),
+        without,
+    ]
+
+    document = _build(rows)
+
+    assert document["ids_output"]["suricata"]["capture_file"] == "/var/log/suricata/log.pcap.1"
+    assert _places(document, "suricata", ("capture_file",), "/var/log/suricata/log.pcap.1") == 1
+    igmp = next(packet for packet in document["packets"] if packet.get("protocol") == "IGMP")
+    assert igmp["suricata"][0]["ids_output"]["capture_file"] is None
+    rebuilt = sorted(
+        json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
+        for packet, engine, entry, rule in _alerts(document)
+    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
+
+
+def test_a_field_the_engine_wrote_as_null_is_never_a_default():
+    rows = [
+        _suricata_row(_suricata_native(tag=None)),
+        _suricata_row(_suricata_native(tag=None, timestamp="2026-10-15T15:54:02.690000+0500"),
+                      event_ts_utc=1792061642690),
+        _suricata_row(_suricata_native(tag=None, timestamp="2026-10-15T15:54:02.695000+0500"),
+                      event_ts_utc=1792061642695),
+        _suricata_igmp_row(),
+    ]
+
+    document = _build(rows)
+
+    assert "tag" not in document.get("ids_output", {}).get("suricata", {})
     rebuilt = sorted(
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)

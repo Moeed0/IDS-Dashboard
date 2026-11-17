@@ -58,7 +58,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "10.0"
+SCHEMA_VERSION = "10.1"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -1267,6 +1267,115 @@ def _endpoint_parts(endpoint: Any) -> tuple[Any, Any]:
     return text, None
 
 
+# A field an alert's engine didn't write, where the file's engine-wide
+# defaults give one: null in the file.
+_ABSENT = _Kept(None)
+
+
+def _value_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _not_defaulted(engine: str) -> set[tuple[str, ...]]:
+    """What the engine-wide defaults never take: the rule's identity (its
+    name and rule text give it) and the fields derived from the alert's time
+    and raw packet."""
+    paths = set(_RULE_ID_PATHS[engine].values()) | {("timestamp",), (_DERIVED_PAYLOAD_TEXT,)}
+    if engine == "snort":
+        paths.add(("rule",))
+    return paths
+
+
+def _missing_prefix(output: Mapping[str, Any], path: tuple[str, ...]) -> tuple[str, ...] | None:
+    """The shortest part of path the output lacks; None when the output has
+    path, or a value that isn't an object on the way to it."""
+    value: Any = output
+    for index, key in enumerate(path):
+        if not isinstance(value, dict):
+            return None
+        if key not in value:
+            return path[: index + 1]
+        value = value[key]
+    return None
+
+
+def _null_on_the_way(output: Mapping[str, Any], path: tuple[str, ...]) -> bool:
+    value: Any = output
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return False
+        value = value[key]
+        if value == _ABSENT:
+            return True
+    return False
+
+
+def _set_path(target: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    for key in path[:-1]:
+        target = target.setdefault(key, {})
+    target[path[-1]] = value
+
+
+def _engine_defaults(engine: str, outputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Each field's most common value among the engine's alerts, when giving
+    it once saves writing it: alerts with that value then leave it out, an
+    alert with another value keeps its own, and an alert without the field
+    says so with null (written where the field, or the object holding it,
+    is missing). Taken only when the value's alerts outnumber the alerts that
+    need null by two or more, and never for a field the engine itself wrote
+    as null on some alert."""
+    if len(outputs) < 2:
+        return {}
+    excluded = _not_defaulted(engine)
+    counts: dict[tuple[str, ...], dict[str, list[Any]]] = {}
+    for output in outputs:
+        for path in _leaf_paths(output):
+            if path in excluded:
+                continue
+            value = _get_path(output, path)
+            counts.setdefault(path, {}).setdefault(_value_key(value), [value, 0])[1] += 1
+    defaults: dict[str, Any] = {}
+    for path, values in counts.items():
+        value, count = max(values.values(), key=lambda item: item[1])
+        missing = sum(_missing_prefix(output, path) is not None for output in outputs)
+        if count < missing + 2 or any(_null_on_the_way(output, path) for output in outputs):
+            continue
+        _set_path(defaults, path, value)
+    return defaults
+
+
+def _without_defaults(output: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """The output with what the defaults give left out, and null for each
+    default field it lacks."""
+    for path in _leaf_paths(defaults):
+        default = _value_key(_get_path(defaults, path))
+        missing = _missing_prefix(output, path)
+        if missing is not None:
+            _set_path(output, missing, _ABSENT)
+        else:
+            value = _get_path(output, path)
+            if value is not _MISSING and _value_key(value) == default:
+                parent = output
+                for key in path[:-1]:
+                    parent = parent[key]
+                del parent[path[-1]]
+    return output
+
+
+def _drop_absent(output: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """Removes the nulls that say the engine didn't write a default field
+    (or the object holding it)."""
+    for path in _leaf_paths(defaults):
+        for end in range(1, len(path) + 1):
+            parent: Any = output
+            for key in path[: end - 1]:
+                parent = parent.get(key) if isinstance(parent, dict) else None
+            if isinstance(parent, dict) and path[end - 1] in parent and parent[path[end - 1]] is None:
+                del parent[path[end - 1]]
+                break
+    return output
+
+
 def rebuild_ids_output(
     document: Mapping[str, Any],
     packet: Mapping[str, Any],
@@ -1289,6 +1398,7 @@ def rebuild_ids_output(
         _dict(_dict(packet.get("ids_output")).get(engine)),
         _dict(entry.get("ids_output")),
     )
+    _drop_absent(output, _dict(_dict(document.get("ids_output")).get(engine)))
     stated = _stated_rule_ids(rule, rule_entry.get("rule_text"))
     for field, path in _RULE_ID_PATHS[engine].items():
         if stated[field] is not None and _get_path(output, path) is _MISSING:
@@ -1547,6 +1657,17 @@ def build_combined_detections(
             )
             packet_of[id(match)] = index
 
+    # Each field's most common value per engine is given once, in the file's
+    # ids_output; each alert keeps only what differs from it.
+    defaults = {
+        engine: _engine_defaults(
+            engine, [outputs[id(match)] for match in matches if match.engine == engine]
+        )
+        for engine in _ENGINE_ORDER
+    }
+    for match in matches:
+        _without_defaults(outputs[id(match)], defaults[match.engine])
+
     # A field with one value on every alert of a rule is given once, in the
     # rule's entry: the fields that describe the rule always, and the other
     # fields _rule_wide picks.
@@ -1560,15 +1681,6 @@ def build_combined_detections(
         )
         for key, rule_matches in by_rule.items()
     }
-    outputs = {key: prune_empty(output) for key, output in outputs.items()}
-    # A field with one value on every alert of an engine in the file (its
-    # capture interface, its version, ...) is given once, in the file's
-    # ids_output, when the engine raised more than one alert.
-    engine_wide = {}
-    for engine in _ENGINE_ORDER:
-        engine_outputs = [outputs[id(match)] for match in matches if match.engine == engine]
-        if len(engine_outputs) > 1:
-            engine_wide[engine] = _take_common(engine_outputs, _leaf_paths(engine_outputs[0]))
     outputs = {key: prune_empty(output) for key, output in outputs.items()}
     for key, paths in _rule_wide(by_rule, packets, outputs, packet_of).items():
         if paths:
@@ -1645,7 +1757,7 @@ def build_combined_detections(
         },
         "alerts": _alert_counts(matches),
         # Per engine: what all its alerts in the file share, once.
-        "ids_output": engine_wide,
+        "ids_output": defaults,
         # Each rule once for the whole file, by the name its alerts give: the
         # IDS output fields it gives on every alert, and its enrichment.
         "rules": {

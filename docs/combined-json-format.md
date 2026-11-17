@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 10.0)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 10.1)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -17,9 +17,10 @@ filters holds only the alerts they choose (a rule, a severity, an address,
 the newest 20, …): its window then says when, and other alerts of that time
 are not in it. Nothing is written twice (9.0):
 
-- what is the same for every alert of an engine in the file (its capture
-  interface, its version, the pass action) is given once in the top-level
-  `ids_output` (10.0);
+- each field's most common value among an engine's alerts in the file (its
+  capture interface, the pass action, the pcap file, a direction, rule
+  metadata dates that many rules share) is given once, as a default, in the
+  top-level `ids_output` (10.1; 10.0 took only values every alert shared);
 - what is the same for every alert of a rule is given once in `rules`;
 - what is the same for every alert of an engine on one connection is given
   once in `flows`;
@@ -46,7 +47,7 @@ in every file.
 |---|---|
 | `window` | Start, end and length of the time window. Times are PKT (`+05:00`). The window ends where both engines' alerts are stored at the latest (see Window end). A file of the Alert Explorer's filters has the time range chosen, or with the newest N alerts (or no range) their own span in whole seconds (`"length": "104 seconds"`). |
 | `alerts` | How many alerts each engine raised in the window; an engine that raised none is left out (`{"snort": 3}`). |
-| `ids_output` | Per engine that raised more than one alert: the output fields with one value on every one of its alerts in the file (`{"snort": {"iface": "ens34", …}}`), given once (10.0). |
+| `ids_output` | Per engine: each output field's most common value among its alerts in the file, given once as a default (`{"snort": {"iface": "ens34", …}}`, 10.1). See The IDS output in parts. |
 | `rules` | Each rule that fired in the window, once: its IDS output fields and its enrichment. |
 | `cves` | Each CVE a rule names, once: NVD summary, CVSS, EPSS and CISA KEV. |
 | `attack_techniques` | Each ATT&CK technique a rule names, once: name and tactics. |
@@ -165,8 +166,17 @@ restarts), or Suricata the same time and raw packet.
 Each alert's whole record, exactly as the engine wrote it, is these parts put
 together:
 
-1. the engine's part in the file's top-level `ids_output`: the fields with one
-   value on every alert of that engine in the file (10.0);
+1. the engine's defaults in the file's top-level `ids_output` (10.1): each
+   field's most common value among the engine's alerts. An alert with that
+   value leaves the field out; an alert with another value gives its own,
+   which replaces the default; an alert the engine wrote without the field
+   says so with `null`, written where the field (or the object that would
+   hold it) is missing, such as `"capture_file": null`. A default is taken
+   only when its value's alerts outnumber the alerts that need `null` by two
+   or more, never for a rule's identity (SID, GID, revision, message, Snort's
+   `rule`), the `timestamp` or `payload_printable`, and never for a field the
+   engine itself wrote as `null` on some alert, so a `null` at a default's
+   field always means "not written";
 2. the rule's `ids_output` in `rules`: the fields that describe the rule
    (Snort `msg`, `class`, `priority`, `gid`, `rev`, `rule`; Suricata
    `alert.signature`, `category`, `severity`, `gid`, `rev`, `metadata`) when
@@ -211,11 +221,13 @@ together:
    engine wrote; otherwise it stays, such as Suricata's text of reassembled
    stream data, which is not the packet's own payload.
 
-The parts never hold the same field twice, so they can be merged key by key
-(inside `alert` and `flow` too). `ids.combined_detections.rebuild_ids_output`
-does this; the tests and a check on the live data (all 2,081 alerts stored on
-17 Nov 2026 by 13:50) rebuild each alert's record exactly as the engine wrote
-it.
+Parts 2 to 5 never hold the same field twice; each can replace a default
+from part 1. So they are merged key by key (inside `alert` and `flow` too),
+the defaults first, and then each `null` at a default's field is removed.
+`ids.combined_detections.rebuild_ids_output` does this; the tests and a check
+on the live data (all 26,168 alerts stored on 17 Nov 2026 by 15:20) rebuild
+each alert's record exactly as the engine wrote it. The defaults made those
+files 9 to 15% smaller than 10.0's.
 
 ## Rules
 
@@ -306,11 +318,10 @@ The dashboard calls it "App" and filters by it.
 
 ## What can still look repeated
 
-- Values that are the same on many but not all alerts of an engine: MAC
-  addresses (every packet through the router has its MAC), and Suricata's
-  `capture_file`, the pcap file each flow's packets went to, which stays the
-  same until the file reaches 100 MiB. Each belongs to its own packet or
-  flow.
+- The second most common value of a field: only the most common one is a
+  default, so an alert with another MAC address, pcap file or direction
+  writes its own, and alerts that share it each write it unless a rule,
+  flow or packet holds it for them.
 - Values of different packets that happen to be equal, such as a packet count
   of 1 on two one-packet connections, or the same TTL on packets of different
   rules. Each belongs to its own packet.
