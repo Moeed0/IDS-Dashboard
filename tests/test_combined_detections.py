@@ -286,7 +286,7 @@ def _build(rows, **kwargs):
 def test_a_packet_both_engines_alerted_on_is_one_entry():
     suricata = _suricata_native(timestamp="2026-10-15T15:54:02.661821+0500")
 
-    document = _build([_suricata_row(suricata), _snort_row()], rule_intelligence=_intelligence)
+    document = _build([_suricata_row(suricata), _snort_row()], rule_intelligence=_intelligence, enrichment=True)
 
     packet, = document["packets"]
     # What the packet is, once; then each engine's part.
@@ -605,7 +605,7 @@ def test_ids_output_is_each_engines_whole_record():
     assert suricata["http"]["http_content_type"] == ""
     assert (suricata["flow_id"], suricata["tx_id"]) == (579200695037415, 0)
 
-    # The rule's output fields and enrichment are in the file's rules, the
+    # The rule's output fields are in the file's rules (no enrichment), the
     # packet's fields with the packet; each engine's part keeps the rest. The
     # GID, SID and revision are in the rule's name; the timestamp is the
     # packet's time in the engine's own format.
@@ -616,8 +616,6 @@ def test_ids_output_is_each_engines_whole_record():
                 "class": "Attempted Administrator Privilege Gain",
                 "priority": 1,
             },
-            "why_triggered": "It alerts when the HTTP headers contain `() {`.",
-            "cves": ["CVE-2014-6271", "CVE-2014-7169"],
         },
         "suricata_signature:1:2019232:7": {
             "ids_output": {"alert": {
@@ -630,8 +628,6 @@ def test_ids_output_is_each_engines_whole_record():
                     "tag": ["Description_Generated_By_Proofpoint_Nexus", "CISA_KEV"],
                 },
             }},
-            "why_triggered": "It alerts when the HTTP headers contain `() {`.",
-            "cves": ["CVE-2014-6271"],
         },
     }
     for entry in (snort_entry, suricata_entry):
@@ -676,7 +672,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "11.1"
+    assert document["schema_version"] == "12.0"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -788,7 +784,7 @@ def test_every_alert_can_be_rebuilt_exactly_from_the_file():
         *_collapse_rows()[2:],
     ]
 
-    document = _build(rows, rule_intelligence=_intelligence)
+    document = _build(rows, rule_intelligence=_intelligence, enrichment=True)
 
     rebuilt = sorted(
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
@@ -805,7 +801,7 @@ def test_rule_enrichment_is_given_once_per_file():
 
     document = _build(
         [_snort_row(), _snort_row(again, event_ts_utc=1792061643100)],
-        rule_intelligence=_intelligence,
+        rule_intelligence=_intelligence, enrichment=True,
     )
 
     first, second = document["packets"]
@@ -846,7 +842,7 @@ def test_rule_names_keep_a_non_default_gid_and_split_revisions():
 
 
 def test_file_is_written_indented():
-    document = _build([_snort_row()], rule_intelligence=_intelligence)
+    document = _build([_snort_row()], rule_intelligence=_intelligence, enrichment=True)
 
     text = serialize_combined_detections(document)
 
@@ -914,7 +910,7 @@ def _full_intelligence(engine, gid, sid, message):
 
 def test_enrichment_holds_cve_and_technique_details_without_general_sentences():
     document = _build(
-        [_snort_row(), _suricata_row()], rule_intelligence=_full_intelligence
+        [_snort_row(), _suricata_row()], rule_intelligence=_full_intelligence, enrichment=True
     )
 
     snort_rule = _without_output(document["rules"]["snort_signature:1:31978:5"])
@@ -976,7 +972,7 @@ SHELLSHOCK_RULE_TEXTS = {
 }
 
 
-def test_rule_text_is_given_without_references_metadata_or_rule_numbers():
+def test_the_file_gives_rule_text_without_enrichment_rule_numbers_or_classtype():
     def intelligence(engine, gid, sid, message):
         return {
             "explanation": {"why_triggered": f"{engine} rule logic"},
@@ -987,25 +983,24 @@ def test_rule_text_is_given_without_references_metadata_or_rule_numbers():
 
     snort_rule = _without_output(document["rules"]["snort_signature:1:31978:5"])
     suricata_rule = _without_output(document["rules"]["suricata_signature:1:2019232:7"])
-    # Everything else stays as the rule file writes it. The CVE references
-    # are the rule's cves; the sid, gid and rev are in the rule's name.
+    # No enrichment: the rule text alone, as the rule file writes it, with
+    # its CVE references (the LLM looks them up). The sid, gid and rev are in
+    # the rule's name, the classtype is the alert's class or category.
     assert snort_rule == {
-        "why_triggered": "snort rule logic",
         "rule_text": (
             'alert tcp $EXTERNAL_NET any -> $HOME_NET $HTTP_PORTS ( msg:"OS-OTHER '
             'Bash CGI environment variable injection attempt"; '
             'flow:to_server,established; http_header; content:"() {",fast_pattern,'
-            'nocase; service:http; classtype:attempted-admin; )'
+            'nocase; service:http; reference:cve,2014-6271; reference:cve,2014-6277; '
+            'reference:cve,2014-6278; reference:cve,2014-7169; )'
         ),
-        "cves": ["CVE-2014-6271", "CVE-2014-6277", "CVE-2014-6278", "CVE-2014-7169"],
     }
-    assert list(suricata_rule) == ["why_triggered", "rule_text", "cves"]
-    assert suricata_rule["rule_text"] == (
+    assert suricata_rule == {"rule_text": (
         'alert http any any -> $HTTP_SERVERS any (msg:"ET WEB_SERVER Possible '
         'CVE-2014-6271 Attempt in Headers"; flow:established,to_server; '
-        'http.header; content:"|28 29 20 7b|"; fast_pattern; content:"bash|20 2d|c"; '
-        'classtype:attempted-admin;)'
-    )
+        'http.header; content:"|28 29 20 7b|"; fast_pattern; content:"bash|20 2d|c";)'
+    )}
+    assert not {"cves", "attack_techniques"} & set(document)
     # The message and revision the rule text gives are not repeated in the
     # rule's IDS output; the alert's full output still rebuilds.
     snort_output = document["rules"]["snort_signature:1:31978:5"]["ids_output"]
@@ -1049,7 +1044,7 @@ def test_rule_documentation_is_given_on_one_line_without_repeats():
             "base_intelligence": {"documentation": FTP_BAD_LOGIN_DOCUMENTATION},
         }
 
-    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
+    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence, enrichment=True)
 
     # The details only repeat the description and impact; the vulnerability
     # type is given once, in the documentation.
@@ -1086,6 +1081,7 @@ def test_rule_documentation_written_on_one_line_is_split_into_its_parts():
     document = _build(
         [_snort_row()],
         rule_intelligence=lambda *rule: {"base_intelligence": {"documentation": documentation}},
+        enrichment=True,
     )
 
     assert document["rules"]["snort_signature:1:31978:5"]["documentation"] == {
@@ -1119,7 +1115,7 @@ def test_rule_documentation_copied_from_nvd_is_left_to_the_cves():
         }}
         return result
 
-    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence)
+    document = _build([_snort_row(), _suricata_row()], rule_intelligence=intelligence, enrichment=True)
 
     snort_rule = document["rules"]["snort_signature:1:31978:5"]
     # The description and impact copy the CVE's NVD summary and CVSS scores;
@@ -1467,7 +1463,7 @@ def test_a_rule_name_and_generic_sentences_are_not_repeated_in_the_rule():
             "rule text; the message names the check that failed."
         )}}
 
-    document = _build([_snort_row(builtin, event_ts_utc=1792061642700)], rule_intelligence=intelligence)
+    document = _build([_snort_row(builtin, event_ts_utc=1792061642700)], rule_intelligence=intelligence, enrichment=True)
 
     rule = document["rules"]["snort_signature:116:408:1"]
     # GID and SID are in the name, and Snort's rule field is gid:sid:rev.
@@ -1529,7 +1525,7 @@ def test_nothing_is_written_once_per_alert_that_holds_for_a_whole_rule_or_connec
         *_collapse_rows()[2:],
     ]
 
-    document = _build(rows, rule_intelligence=_intelligence)
+    document = _build(rows, rule_intelligence=_intelligence, enrichment=True)
 
     groups = {}
     for packet, engine, entry, rule in _alerts(document):
@@ -1780,4 +1776,4 @@ def test_rule_text_leaves_out_the_rule_numbers_its_name_gives():
     assert _rule_text(
         'alert tcp any any -> any any (msg:"x"; content:"sid:1;"; gid:1; sid:9; rev:3; '
         'classtype:misc-activity;)'
-    ) == 'alert tcp any any -> any any (msg:"x"; content:"sid:1;"; classtype:misc-activity;)'
+    ) == 'alert tcp any any -> any any (msg:"x"; content:"sid:1;";)'

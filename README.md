@@ -99,7 +99,11 @@ network interface (afpacket)
   the LLM PC (`IDS_LLM_URL` in `.env`), where `scripts/llm_receiver.py`
   saves each file in a folder (copy it there and run
   `python llm_receiver.py`; standard library only); the old alerts' zips
-  are at the bottom.
+  are at the bottom. The file has no enrichment: the LLM PC fetches the
+  threat-intel database from the dashboard (`/intel/intel.db`) and looks up
+  each file's CVEs and ATT&CK techniques with `scripts/intel_lookup.py`
+  (`python intel_lookup.py download http://<dashboard>:8501/`, then
+  `python intel_lookup.py enrich <file>.json`; standard library only).
 
 ## What is where
 
@@ -111,7 +115,7 @@ network interface (afpacket)
 | `src/ids/` | The shared code: settings, database, tailer, normalizer, screen data, combined export, rule and intel lookups, rule index builder |
 | `web/` | The React page (TypeScript, Vite) |
 | `deploy/` | systemd services, the engines' settings for this lab, log rotation ([deploy/README.md](deploy/README.md)) |
-| `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts; `backup_database.py` and `restore_backup.py` back the database up and put it back; `send_test_alert.py` is the hourly test alert |
+| `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts; `backup_database.py` and `restore_backup.py` back the database up and put it back; `send_test_alert.py` is the hourly test alert; `llm_receiver.py` and `intel_lookup.py` run on the LLM PC (receive Sends; fetch the intel database and look up a file's CVEs and techniques) |
 | `config/lab_phases.json` | The lab's attacker addresses, for the dashboard's warnings |
 | `data/` | Data each machine builds or downloads ([data/README.md](data/README.md)) |
 | `alert-archive/` | The alerts older than the database keeps, in 10-day zips (see [Old alerts](#old-alerts)) |

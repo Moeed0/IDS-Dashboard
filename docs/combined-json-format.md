@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 11.1)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 12.0)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -24,8 +24,6 @@ are not in it. Nothing is written twice (9.0):
 - what is the same for every alert of a rule is given once in `rules`;
 - what is the same for every alert of an engine on one connection is given
   once in `flows`;
-- each CVE and ATT&CK technique is described once in `cves` and
-  `attack_techniques`, however many rules name it;
 - what says what the packet is is given once, with the packet, and so is
   what an engine's different alerts on one packet share (9.1);
 - what a rule's name states (GID, SID, revision) is not repeated in its IDS
@@ -49,13 +47,11 @@ in every file.
 | `window` | Start, end and length of the time window. Times are PKT (`+05:00`). The window ends where both engines' alerts are stored at the latest (see Window end). A file of the Alert Explorer's filters has the time range chosen, or with the newest N alerts (or no range) their own span in whole seconds (`"length": "104 seconds"`). |
 | `alerts` | How many alerts each engine raised in the window; an engine that raised none is left out (`{"snort": 3}`). |
 | `ids_output` | Per engine: each output field's most common value among its alerts in the file, given once as a default (`{"snort": {"iface": "ens34", …}}`, 10.1). See The IDS output in parts. |
-| `rules` | Each rule that fired in the window, once: its IDS output fields and its enrichment. |
-| `cves` | Each CVE a rule names, once: NVD summary, CVSS, EPSS and CISA KEV. |
-| `attack_techniques` | Each ATT&CK technique a rule names, once: name and tactics. |
+| `rules` | Each rule that fired in the window, once: its IDS output fields and its rule text. |
 | `flows` | Each connection with output the same on every alert of an engine on it, once, by number. |
 | `packets` | The packets the engines alerted on, oldest first. |
 
-`cves`, `attack_techniques` and `flows` are left out when they would be empty.
+`flows` is left out when it would be empty.
 
 ### Window end
 
@@ -227,8 +223,8 @@ Parts 2 to 5 never hold the same field twice; each can replace a default
 from part 1. So they are merged key by key (inside `alert` and `flow` too),
 the defaults first, and then each `null` at a default's field is removed.
 `ids.combined_detections.rebuild_ids_output` does this; the tests and a check
-on the live data (all 31,022 alerts stored on 17 Nov 2026 by 16:55, with
-11.1) rebuild each alert's record exactly as the engine wrote it. The defaults made those
+on the live data (all 31,949 alerts stored on 17 Nov 2026 by 17:20, with
+12.0) rebuild each alert's record exactly as the engine wrote it. The defaults made those
 files 9 to 15% smaller than 10.0's.
 
 ## Rules
@@ -240,69 +236,54 @@ alerts give, in one format for both engines (11.0):
 `snort_signature:1:31978:5` and `suricata_signature:1:2001119:6`. Two
 revisions of one rule are two rules. A rule appears
 only when the file has something to say about it. Each rule has its
-`ids_output` part (see The IDS output in parts) and the enrichment from
-the local rule files and offline intelligence:
+`ids_output` part (see The IDS output in parts) and its `rule_text`: the
+rule as written in the local Snort or Suricata rule file, without
 
-- `why_triggered` — what the rule looks for, in words with no backslashes
-  (9.2), so that it reads the same in every editor and browser: a byte that is
-  not plain text is written as `0x81`, a content match as its bytes and text
-  (`` the bytes 0x0d 0x0a followed by `Host: ` ``), and a regular expression step
-  by step (`at the start, any 2 bytes other than 0x0a, then a byte from 0x81
-  to 0x87, then the byte 0x85`). A regular expression that cannot be worded
-  exactly (PCRE-only syntax, or words over 1,000 characters) is "the regular
-  expression in the rule text". Snort's built-in rules (GID above 1) have
-  no rule text; their message names the check that failed.
-- `rule_text` — the rule as written in the local Snort or Suricata rule
-  file, without its web-link and CVE references (`reference:url,…`,
-  `reference:cve,…`; the CVEs are the rule's `cves`), its `metadata`
-  option (rule upkeep or policy information, or a repeat of Suricata's own
-  alert metadata) and its `sid`, `gid` and `rev` options, which the rule's
-  name gives (11.1). Every other option stays as written; a link inside a
-  content match is detection logic and stays.
-- `documentation` — the rule's published documentation, each part on one
-  line: `description`, `impact`, `details`, `ease_of_attack`,
-  `what_to_look_for` and `vulnerability` (`type` and `description`). Talos
-  documents many Snort rules (4,017 in the local copy); Suricata's ET Open
-  rules have none. Talos writes the documentation of many CVE rules from NVD
-  data: a description or impact that copies a CVE's NVD summary or CVSS
-  scores is left out (it is given under `cves`), and so are details that
-  only repeat the description and impact. Added in 8.1.
-- `what_it_means` — other rule-specific meaning (left out when it would
-  only list the rule's CVEs or repeat the documented vulnerability type).
-- `known_usage`, `false_positives` — from the rule's documentation.
-- `what_to_check`, `recommended_actions` — rule-specific steps.
-- `cves` — the IDs of the CVEs the rule names; their details are in the
-  file's `cves`.
-- `attack_techniques` — the IDs of the rule's ATT&CK techniques; their
-  details are in the file's `attack_techniques`.
+- its `sid`, `gid` and `rev` options, which the rule's name gives (11.1);
+- its `classtype`, which the alert's `class` (Snort) or `category`
+  (Suricata) gives (12.0);
+- its `metadata` option (rule upkeep or policy information, or a repeat of
+  Suricata's own alert metadata);
+- its web-link references (`reference:url,…`).
 
-## CVEs and ATT&CK techniques
+Every other option stays as written, the CVE references
+(`reference:cve,2014-6271`) among them; a link inside a content match is
+detection logic and stays. Snort's built-in rules (GID above 1) have no rule
+text; their message names the check that failed (`(ipv4) IPv4 option set`:
+the `ipv4` decoder).
 
-`cves` gives each CVE once, by ID: NVD `summary`, `cvss` (score, version,
-severity, vector), `epss` (score, percentile) and `cisa_kev` (date added, and
-`known_ransomware_use` when CISA lists it). `attack_techniques` gives each
-technique once, by ID: `name` and `tactics`. A CVE with no local details is
-named by its rules only.
+## No enrichment (12.0)
 
-## What is left out, and why
+The file holds the alerts and nothing else: no explanation of the rules
+(`why_triggered`), no published rule documentation, no CVE or ATT&CK
+details, no advice. Until 11.1 it carried them; now the LLM adds them
+itself, from the same threat-intelligence database, which the dashboard
+offers at `/intel/intel.db` (about 1.4 GB: NVD, EPSS, CISA KEV and MITRE
+ATT&CK; `/intel` says what each source's data is as of).
 
-Nothing of the engines' own output (10.0; until 9.4 the interface, MAC
-addresses, internal counters and IDs, the pass action, default values, DNS
-bookkeeping, rule upkeep metadata, web links and empty values were left out,
-so a record didn't rebuild exactly). What the file leaves out is in the
-enrichment it adds:
+On the LLM PC, `scripts/intel_lookup.py` (standard library only) fetches it
+and looks up what a file names:
 
-- Sentences that hold for any alert, or for every rule of a kind (for example
-  "review surrounding IDS alerts and host logs", "verify whether the
-  destination runs an affected product", "built-in rules have no rule text"):
-  they say nothing about the alert at hand. The "check the documented false
-  positives" step is left out too; the rule's own `false_positives` text says
-  what they are.
-- Recommended actions built only from a rule's CVE scores ("Check this
-  destination first: CVE-… scores …"): `cves` gives the CVE and its scores.
-- Web links in the enrichment, and from a rule's documentation its
-  contributors, category text and reference lists, and the vulnerability
-  type "N/A".
+    python intel_lookup.py download http://172.16.20.142:8501/
+    python intel_lookup.py enrich snort_suricata_combined_….json
+    python intel_lookup.py lookup CVE-2014-6271 T1190
+
+`enrich` finds every CVE the file names (a rule text's
+`reference:cve,2014-6271`, Suricata's metadata `CVE_2014_6271`, a message's
+`CVE-2020-11899`) and every ATT&CK technique (Suricata's
+`mitre_technique_id`), and prints what the database holds on each: the NVD
+summary, publication date, CVSS, CWEs, EPSS and the CISA KEV entry; a
+technique's name, tactics, platforms and description.
+
+The dashboard's own alert view still shows the enrichment for a person
+reading one alert.
+
+## What is kept
+
+Nothing of the engines' own output is left out (10.0; until 9.4 the
+interface, MAC addresses, internal counters and IDs, the pass action,
+default values, DNS bookkeeping, rule upkeep metadata, web links and empty
+values were left out, so a record didn't rebuild exactly).
 
 What the packet carried is the engines' own: Snort's `b64_data` and
 Suricata's raw `packet`, in Base64, and Suricata's `payload_printable` and
@@ -334,5 +315,6 @@ The dashboard calls it "App" and filters by it.
   116:444 and 51037 (IGMP queries): each says what every alert of that rule
   had.
 - A CVE named in a rule's message or in Suricata's own alert metadata
-  (`cve: ["CVE_2014_6271"]`) as well as in the rule's `cves`: the message and
-  metadata are the engine's own words, kept so each alert rebuilds exactly.
+  (`cve: ["CVE_2014_6271"]`) as well as in its rule text's
+  `reference:cve,…`: the message and metadata are the engine's own words,
+  kept so each alert rebuilds exactly, and the rule text is the rule's.

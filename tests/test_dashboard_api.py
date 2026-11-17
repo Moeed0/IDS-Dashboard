@@ -546,3 +546,38 @@ def test_send_says_why_nothing_was_sent(db_path):
     assert (status, json.loads(body)["error"]) == (
         502, "the LLM PC at 192.168.50.20:8000 answered 500: model not loaded",
     )
+
+
+def test_the_intel_database_is_offered_to_the_llm_pc(tmp_path):
+    db_path = tmp_path / "ids.db"
+    sqlite3.connect(db_path).close()
+    intel = tmp_path / "intel.db"
+    connection = sqlite3.connect(intel)
+    connection.execute(
+        "CREATE TABLE source_metadata (source TEXT PRIMARY KEY, data_as_of TEXT,"
+        " imported_at TEXT NOT NULL, record_count INTEGER)"
+    )
+    connection.execute("INSERT INTO source_metadata VALUES ('nvd', '2026-11-17', '2026-11-17T09:00', 3)")
+    connection.commit()
+    connection.close()
+
+    missing = create_app(db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None)
+    assert _get(missing, "/intel")[0] == 404
+    assert _get(missing, "/intel/intel.db")[0] == 404
+
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        intel_db=intel,
+    )
+    status, _, body = _get(app, "/intel")
+    assert status == 200
+    info = json.loads(body)
+    assert info["file"] == "/intel/intel.db"
+    assert info["bytes"] == intel.stat().st_size
+    assert info["sources"]["nvd"] == {
+        "data_as_of": "2026-11-17", "imported_at": "2026-11-17T09:00", "records": 3,
+    }
+    status, headers, body = _get(app, "/intel/intel.db")
+    assert status == 200 and body == intel.read_bytes()
+    assert 'filename="intel.db"' in headers["content-disposition"]
+    assert _get(app, "/intel/intel.db", token="wrong")[0] == 401

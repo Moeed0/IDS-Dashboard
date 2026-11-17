@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -75,6 +75,7 @@ from ids.dashboard_data import (
     selection_export,
     status,
 )
+from ids.offline_intelligence import DEFAULT_DB_PATH as INTEL_DB
 from ids.test_alert import result_path
 from ids.uptime import machine_off_periods
 
@@ -233,6 +234,7 @@ def create_app(
     send_url: str | None = None,
     send_token: str | None = None,
     sender: Callable[[str, bytes, Mapping[str, str]], tuple[int, str]] = post_file,
+    intel_db: Path | str | None = None,
 ) -> Starlette:
     """The API over the live database at ``db_path``, answering requests
     that send ``token`` (every request when it is None), and the built React
@@ -336,6 +338,39 @@ def create_app(
         if path is None:
             return JSONResponse({"error": f"no archive file named {name}"}, status_code=404)
         return FileResponse(path, filename=name)
+
+    def intel_info(request: Request) -> Response:
+        """The threat-intelligence database the LLM PC fetches at
+        /intel/intel.db: its size, when it was built and what each source's
+        data is as of."""
+        path = Path(intel_db) if intel_db is not None else None
+        if path is None or not path.is_file():
+            return JSONResponse({"error": "no threat-intelligence database"}, status_code=404)
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        try:
+            sources = {
+                source: {"data_as_of": as_of, "imported_at": imported, "records": records}
+                for source, as_of, imported, records in connection.execute(
+                    "SELECT source, data_as_of, imported_at, record_count FROM source_metadata"
+                )
+            }
+        finally:
+            connection.close()
+        stat = path.stat()
+        return JSONResponse({
+            "file": "/intel/intel.db",
+            "bytes": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+            "sources": sources,
+        })
+
+    def intel_download(request: Request) -> Response:
+        path = Path(intel_db) if intel_db is not None else None
+        if path is None or not path.is_file():
+            return JSONResponse({"error": "no threat-intelligence database"}, status_code=404)
+        # The import replaces the file whole, so an open download keeps
+        # reading the one it started with.
+        return FileResponse(path, filename="intel.db", media_type="application/vnd.sqlite3")
 
     def alert_list(request: Request) -> Response:
         return JSONResponse(alerts(
@@ -509,6 +544,8 @@ def create_app(
         Route("/export/selection/send", guarded(send_selection), methods=["POST"]),
         Route("/archive", guarded(archive_list)),
         Route("/archive/{name}", guarded(archive_download)),
+        Route("/intel", guarded(intel_info)),
+        Route("/intel/intel.db", guarded(intel_download)),
     ]
     if web_dist is not None and (Path(web_dist) / "index.html").is_file():
         # Everything the routes above do not answer: the page and its files.
@@ -630,6 +667,7 @@ def main(argv: list[str] | None = None) -> None:
         backup_dir=settings.backup_dir if settings.backup_keep else None,
         send_url=send_url,
         send_token=send_token,
+        intel_db=INTEL_DB,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

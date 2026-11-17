@@ -58,7 +58,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "11.1"
+SCHEMA_VERSION = "12.0"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -826,11 +826,12 @@ def _rule_options(text: Any) -> list[tuple[str, str]]:
 
 
 def _rule_text(text: Any) -> str | None:
-    """The rule as written in its rule file, without its web-link and CVE
-    references (the file has no web links, and the rule's cves give its
-    CVEs), its metadata, which is rule upkeep or policy information or
-    repeats Suricata's own alert metadata, and its sid, gid and rev, which
-    the rule's name gives (``snort_signature:GID:SID:REV``)."""
+    """The rule as written in its rule file, without its web-link
+    references (the file has no web links), its metadata, which is rule
+    upkeep or policy information or repeats Suricata's own alert metadata,
+    its sid, gid and rev, which the rule's name gives
+    (``snort_signature:GID:SID:REV``), and its classtype, which the alert's
+    class (Snort) or category (Suricata) gives."""
     text = str(text or "").strip()
     start, end = text.find("("), text.rfind(")")
     if start < 0 or end <= start:
@@ -839,10 +840,10 @@ def _rule_text(text: Any) -> str | None:
     dropped = [
         match.span()
         for match in _RULE_OPTION_RE.finditer(body)
-        if match.group(1).lower() in ("metadata", "sid", "gid", "rev")
+        if match.group(1).lower() in ("metadata", "sid", "gid", "rev", "classtype")
         or (
             match.group(1).lower() == "reference"
-            and str(match.group(2) or "").strip().lower().startswith(("url", "cve,"))
+            and str(match.group(2) or "").strip().lower().startswith("url")
         )
     ]
     for begin, finish in reversed(dropped):
@@ -1600,6 +1601,7 @@ def build_combined_detections(
     rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None] | None = None,
     generated_at: datetime | None = None,
     trim_to_window: bool = True,
+    enrichment: bool = False,
 ) -> dict[str, Any]:
     """Build the combined Snort + Suricata document for one time window.
 
@@ -1608,6 +1610,10 @@ def build_combined_detections(
     is called once per rule with (engine, gid, sid, message) and returns the
     offline intelligence for that rule. With ``trim_to_window`` false every
     row is kept: the caller chose them (the window then only says when).
+    The rules carry their rule text; with ``enrichment`` (the dashboard's
+    alert view) also what the offline intelligence says of them, and the
+    file its CVEs and ATT&CK techniques. The file for the LLM has none: the
+    LLM enriches it from the intelligence database itself.
 
     The document is a timeline of the packets the alerts are on, oldest
     first; a packet both engines alerted on is one entry with both engines'
@@ -1682,7 +1688,14 @@ def build_combined_detections(
             )
     outputs = {key: prune_empty(output) for key, output in outputs.items()}
     rule_entries = {
-        key: prune_empty({"ids_output": common[key], **_rule_section(rule_facts[key])})
+        key: prune_empty({
+            "ids_output": common[key],
+            **(
+                _rule_section(rule_facts[key])
+                if enrichment
+                else {"rule_text": rule_facts[key].get("rule_text")}
+            ),
+        })
         for key in by_rule
     }
     # An alert names its rule only when the file holds something about it.
@@ -1721,7 +1734,7 @@ def build_combined_detections(
             flow_numbers[flow_key] = len(flow_numbers) + 1
 
     # Each CVE and ATT&CK technique once, however many rules name it.
-    named = [rule_facts[key] for key in rule_ids]
+    named = [rule_facts[key] for key in rule_ids] if enrichment else []
     cves = {
         cve: details
         for rule in named
