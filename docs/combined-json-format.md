@@ -268,8 +268,10 @@ from files on the IDS machine:
   local copy `data/json/rule_docs_preprocessed_by_sid.json` (3,945 rules),
   and from `data/intel/sources/talos/rule_docs.jsonl`, where
   `scripts/download_talos_docs.py` saves the snort.org page of every rule in
-  the registered snapshot (about 52,700 text and SO rules) once. Run it
-  once, then after a rule update to fetch only the new rules:
+  the registered snapshot (about 52,700 text and SO rules) once: one page a
+  second, waiting when snort.org says too many (HTTP 429), so about a day.
+  Run it once, again if it stops, and after a rule update to fetch only the
+  new rules:
 
       .venv/bin/python scripts/download_talos_docs.py
       PYTHONPATH=src:scripts .venv/bin/python scripts/import_offline_intelligence.py --add-rule-docs

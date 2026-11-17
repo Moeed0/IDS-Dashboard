@@ -186,3 +186,32 @@ Ease of Attack:
         "cve_ids": "CVE-2014-6271, CVE-2014-7169",
         "rule_vulnerability": "Command Injection\nUnsafe input reaches a shell.",
     }
+
+
+def test_a_page_refused_for_too_many_requests_is_fetched_again_after_waiting(monkeypatch):
+    import email.message
+    import io
+    import urllib.error
+
+    import scripts.download_talos_docs as talos
+
+    answers = []
+
+    def opened(request, timeout):
+        answers.append(request.full_url)
+        if len(answers) == 1:
+            headers = email.message.Message()
+            headers["Retry-After"] = "0"
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", headers, io.BytesIO())
+        return io.BytesIO(b'<!-- TABBED CONTENT BEGIN --><h3>Alert Message</h3><p>A rule</p>')
+
+    monkeypatch.setattr(talos._opener, "open", opened)
+    monkeypatch.setattr(talos, "_pace", talos._Pace())
+
+    record = talos.fetch(1, 217)
+
+    assert answers == ["https://www.snort.org/rule_docs/1-217"] * 2
+    assert record == {
+        "gid": 1, "sid": 217, "doc_found": 1,
+        "doc_url": "https://www.snort.org/rule_docs/1-217", "msg": "A rule",
+    }

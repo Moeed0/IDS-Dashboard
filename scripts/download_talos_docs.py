@@ -21,8 +21,16 @@ doc_url, msg, rule_category, rule_explanation, what_to_look_for,
 known_usage, false_positives, contributors, rule_groups, mitre_id, cve_ids
 and rule_vulnerability, each as the page writes it; the page's placeholders
 ("No information provided", "No known false positives", "None", …) are left
-out. A few requests at a time (--workers, default 3): about 50,000 pages take
-two to three hours.
+out.
+
+snort.org limits how fast pages may be fetched: three at a time were
+refused (HTTP 429) after about 50. So it fetches one page at a time, a
+second apart (--workers, --pause), and when snort.org answers 429 every
+worker waits (as long as its Retry-After says, else a minute, doubling up to
+15 minutes) and the page is fetched again. About 50,000 pages take a day or
+so; run it where it can keep going, and again if it stops:
+
+    nohup .venv/bin/python scripts/download_talos_docs.py > data/intel/sources/talos/download.log 2>&1 &
 """
 
 from __future__ import annotations
@@ -132,25 +140,69 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def fetch(gid: int, sid: int, attempts: int = 3) -> dict[str, Any]:
+class _Pace:
+    """When snort.org asked to slow down: every worker waits until then."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.resume_at = 0.0
+        self.wait = 60.0
+
+    def hold(self) -> None:
+        while True:
+            with self.lock:
+                left = self.resume_at - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(left, 5))
+
+    def slow_down(self, retry_after: str | None) -> float:
+        with self.lock:
+            try:
+                wait = float(retry_after) if retry_after else self.wait
+            except ValueError:
+                wait = self.wait
+            self.wait = min(self.wait * 2, 900.0)
+            self.resume_at = max(self.resume_at, time.monotonic() + wait)
+            return wait
+
+    def went_well(self) -> None:
+        with self.lock:
+            self.wait = 60.0
+
+
+_pace = _Pace()
+
+
+def fetch(gid: int, sid: int, attempts: int = 3, slowdowns: int = 20) -> dict[str, Any]:
     url = PAGE_URL.format(gid=gid, sid=sid)
-    for attempt in range(attempts):
+    attempt = 0
+    while True:
+        _pace.hold()
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with _opener.open(request, timeout=30) as answer:
                 page = answer.read().decode("utf-8", errors="replace")
             document = {key: value for key, value in parse_page(page).items() if value}
+            _pace.went_well()
             return {"gid": gid, "sid": sid, "doc_found": 1, "doc_url": url, **document}
         except urllib.error.HTTPError as error:
             if error.code in (301, 302, 303, 404):
+                _pace.went_well()
                 return {"gid": gid, "sid": sid, "doc_found": 0, "doc_url": url}
-            if attempt == attempts - 1:
+            if error.code == 429 and slowdowns > 0:
+                slowdowns -= 1
+                wait = _pace.slow_down(error.headers.get("Retry-After"))
+                print(f"   snort.org asked to slow down: waiting {wait:.0f} s", flush=True)
+                continue
+            attempt += 1
+            if attempt >= attempts:
                 raise
         except (urllib.error.URLError, TimeoutError, ConnectionError):
-            if attempt == attempts - 1:
+            attempt += 1
+            if attempt >= attempts:
                 raise
-        time.sleep(5 * (attempt + 1))
-    raise RuntimeError("unreachable")
+        time.sleep(5 * attempt)
 
 
 def fetched(output: Path) -> set[tuple[int, int]]:
@@ -202,8 +254,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--rules", type=Path, default=DEFAULT_RULES, help=f"the registered snapshot (default: {DEFAULT_RULES})")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="where the documents go")
-    parser.add_argument("--workers", type=int, default=3, help="requests at a time (default: 3)")
-    parser.add_argument("--pause", type=float, default=0.2, help="seconds each worker waits between pages")
+    parser.add_argument("--workers", type=int, default=1, help="requests at a time (default: 1)")
+    parser.add_argument("--pause", type=float, default=1.0, help="seconds each worker waits between pages (default: 1)")
     parser.add_argument("--refresh", action="store_true", help="fetch every rule again")
     parser.add_argument("--limit", type=int, help="fetch at most this many (to try it)")
     args = parser.parse_args(argv)
