@@ -261,9 +261,26 @@ itself, from the same threat-intelligence database, which the dashboard
 offers at `/intel/intel.db` (about 1.4 GB: NVD, EPSS, CISA KEV and MITRE
 ATT&CK; `/intel` says what each source's data is as of).
 
-Talos's documentation of Snort's rules (3,945 rules, from the local copy
-`data/json/rule_docs_preprocessed_by_sid.json`) is in the database too, in
-`talos_rule_docs` by GID and SID; ET Open's Suricata rules have none.
+The database also holds the Snort rules' documentation, all of it read
+from files on the IDS machine:
+
+- `talos_rule_docs`: Talos's documentation, by GID and SID. It comes from the
+  local copy `data/json/rule_docs_preprocessed_by_sid.json` (3,945 rules),
+  and from `data/intel/sources/talos/rule_docs.jsonl`, where
+  `scripts/download_talos_docs.py` saves the snort.org page of every rule in
+  the registered snapshot (about 52,700 text and SO rules) once. Run it
+  once, then after a rule update to fetch only the new rules:
+
+      .venv/bin/python scripts/download_talos_docs.py
+      PYTHONPATH=src:scripts .venv/bin/python scripts/import_offline_intelligence.py --add-rule-docs
+
+  Nothing reads snort.org after that: the database holds the pages.
+- `snort_builtin_docs`: Snort's own description of each built-in rule
+  (GID 2 and up, 638 rules), from `builtin_stubs.txt` in Snort's source,
+  installed with it at `/usr/local/share/doc/snort/`.
+
+ET Open's Suricata rules have no such documentation; a rule of your own
+(`local.rules`) has none either.
 
 On the LLM PC, `scripts/intel_lookup.py` (standard library only) fetches the
 database and writes what it says of a file as plain text, to put in the
@@ -279,6 +296,7 @@ metadata `CVE_2014_6271`, a message's `CVE-2020-11899`) and ATT&CK
 techniques (Suricata's `mitre_technique_id`) it names, plus those a rule's
 Talos documentation names, and gives:
 
+- a built-in Snort rule's description, from Snort;
 - a Snort rule's Talos documentation: category (described once), description,
   impact, details, ease of attack, what to look for, false positives, known
   usage, vulnerability type, CVEs and technique; the parts that repeat

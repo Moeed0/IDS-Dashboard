@@ -11,7 +11,8 @@ metadata names CVEs (``CVE_2014_6271``) and ATT&CK techniques
 finds those and reads what the database holds on them:
 
 - a Snort rule: Talos's documentation of it (category, explanation, what to
-  look for, false positives, known usage, vulnerability type);
+  look for, false positives, known usage, vulnerability type), or for a
+  built-in rule (GID 2 and up) Snort's own description of it;
 - a CVE: the NVD summary, publication date, CVSS, CWEs, EPSS and, when it is
   in CISA's Known Exploited Vulnerabilities catalog, its KEV entry;
 - a technique: its name, tactics, platforms and description.
@@ -96,15 +97,22 @@ def _has_table(connection: sqlite3.Connection, name: str) -> bool:
 
 
 def rule_details(connection: sqlite3.Connection, rule: str) -> dict[str, Any] | None:
-    """Talos's documentation of a Snort rule; None for a Suricata rule (ET
-    Open has none) or a rule Talos doesn't document."""
+    """Talos's documentation of a Snort rule, or Snort's own description of
+    a built-in rule Talos doesn't document; None for a Suricata rule (ET
+    Open has none) or a rule neither documents."""
     match = _RULE_RE.fullmatch(rule)
-    if not match or match.group(1) != "snort" or not _has_table(connection, "talos_rule_docs"):
+    if not match or match.group(1) != "snort":
         return None
+    gid, sid = int(match.group(2)), int(match.group(3))
     row = connection.execute(
-        "SELECT * FROM talos_rule_docs WHERE gid = ? AND sid = ?",
-        (int(match.group(2)), int(match.group(3))),
-    ).fetchone()
+        "SELECT * FROM talos_rule_docs WHERE gid = ? AND sid = ?", (gid, sid),
+    ).fetchone() if _has_table(connection, "talos_rule_docs") else None
+    if row is None or not _one_line(row["explanation"]) or gid > 3:
+        builtin = connection.execute(
+            "SELECT description FROM snort_builtin_docs WHERE gid = ? AND sid = ?", (gid, sid),
+        ).fetchone() if _has_table(connection, "snort_builtin_docs") else None
+        if builtin is not None:
+            return {"snort_documentation": {"description": builtin["description"]}}
     if row is None:
         return None
     pieces = _TALOS_SECTION_RE.split(str(row["explanation"] or ""))
@@ -133,7 +141,10 @@ def rule_details(connection: sqlite3.Connection, rule: str) -> dict[str, Any] | 
                 if _one_line(kind) and _one_line(kind).upper() != "N/A" else None
             ),
             "cves": [cve.strip() for cve in str(row["cve_ids"] or "").split(",") if cve.strip()],
-            "attack_technique": _one_line(row["mitre_technique_id"]),
+            "attack_techniques": [
+                technique.strip() for technique in str(row["mitre_technique_id"] or "").split(",")
+                if technique.strip()
+            ],
             "written_from_nvd": "national vulnerability database" in str(row["contributors"] or "").lower(),
         },
     })
@@ -209,9 +220,9 @@ def lookup(db: Path, ids: Iterable[str]) -> dict[str, Any]:
                 if details is None:
                     continue
                 found["rules"][given] = details
-                talos = details["talos_documentation"]
+                talos = details.get("talos_documentation", {})
                 cves += talos.get("cves", [])
-                techniques += [talos["attack_technique"]] if talos.get("attack_technique") else []
+                techniques += talos.get("attack_techniques", [])
             elif given.upper().replace("_", "-").startswith("CVE-"):
                 cves.append(given.upper().replace("_", "-"))
             else:
@@ -248,6 +259,7 @@ def enrich(db: Path, combined: str | Mapping[str, Any]) -> dict[str, Any]:
 _SOURCE_NAMES = {
     "nvd": "NVD", "epss": "EPSS", "cisa_kev": "CISA KEV", "mitre_attack": "MITRE ATT&CK",
     "talos_rule_docs": "Talos rule documentation",
+    "snort_builtin_docs": "Snort built-in rule descriptions",
 }
 
 
@@ -263,6 +275,10 @@ def as_text(found: Mapping[str, Any]) -> str:
     summaries = {details.get("summary") for details in found.get("cves", {}).values()}
     categories: set[str] = set()
     for rule, details in found.get("rules", {}).items():
+        if "snort_documentation" in details:
+            lines += ["", f"Rule {rule}: Snort's description of this built-in rule",
+                      f"  Description: {details['snort_documentation']['description']}"]
+            continue
         talos = dict(details["talos_documentation"])
         lines += ["", f"Rule {rule}: Talos documentation"]
         # A category's description once, at its first rule.
@@ -287,8 +303,8 @@ def as_text(found: Mapping[str, Any]) -> str:
                          + (f": {kind['description']}" if kind.get("description") else ""))
         if talos.get("cves"):
             lines.append(f"  CVEs: {', '.join(talos['cves'])}")
-        if talos.get("attack_technique"):
-            lines.append(f"  ATT&CK technique: {talos['attack_technique']}")
+        if talos.get("attack_techniques"):
+            lines.append(f"  ATT&CK technique: {', '.join(talos['attack_techniques'])}")
     for cve, details in found.get("cves", {}).items():
         heading = cve + (f" (published {details['published']})" if details.get("published") else "")
         lines += ["", heading]
@@ -323,7 +339,7 @@ def as_text(found: Mapping[str, Any]) -> str:
     if found.get("unknown"):
         lines += ["", f"Not in the database: {', '.join(found['unknown'])}"]
     if not (found.get("rules") or found.get("cves") or found.get("attack_techniques")):
-        lines += ["", "The database holds nothing on this file's rules: no Talos documentation, CVEs or ATT&CK techniques."]
+        lines += ["", "The database holds nothing on this file's rules: no rule documentation, CVEs or ATT&CK techniques."]
     return "\n".join(lines).strip() + "\n"
 
 

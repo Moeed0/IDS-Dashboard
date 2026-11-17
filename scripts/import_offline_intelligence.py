@@ -24,11 +24,28 @@ from typing import Any, Iterator
 
 from ids.offline_intelligence import DEFAULT_DB_PATH, SCHEMA_SQL
 
-# Talos's documentation of Snort's rules (the local copy, by SID). It goes
-# in the database so that the LLM PC, which fetches the database, has it.
+# Talos's documentation of Snort's rules: the local copy (by SID), and the
+# pages scripts/download_talos_docs.py saved from snort.org, which win. And
+# Snort's own description of its built-in rules, from its source (installed
+# with it). They go in the database so that the LLM PC, which fetches the
+# database, has them.
 DEFAULT_RULE_DOCS_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "json" / "rule_docs_preprocessed_by_sid.json"
 )
+DEFAULT_TALOS_PAGES_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "intel" / "sources" / "talos" / "rule_docs.jsonl"
+)
+DEFAULT_BUILTIN_STUBS_PATH = Path("/usr/local/share/doc/snort/builtin_stubs.txt")
+BUILTIN_DOCS_SQL = """
+DROP TABLE IF EXISTS snort_builtin_docs;
+CREATE TABLE snort_builtin_docs (
+    gid INTEGER NOT NULL,
+    sid INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    PRIMARY KEY (gid, sid)
+);
+"""
+_BUILTIN_ID_RE = re.compile(r"^(\d+):(\d+)\s*$")
 RULE_DOCS_SQL = """
 DROP TABLE IF EXISTS talos_rule_docs;
 CREATE TABLE talos_rule_docs (
@@ -46,6 +63,7 @@ CREATE TABLE talos_rule_docs (
     cve_ids TEXT,
     mitre_technique_id TEXT,
     contributors TEXT,
+    rule_groups TEXT,
     PRIMARY KEY (gid, sid)
 );
 """
@@ -677,53 +695,106 @@ def _number(value: Any) -> int | None:
     return int(text) if text.isdigit() else None
 
 
-def _import_rule_docs(connection: sqlite3.Connection, path: Path) -> int:
+def _rule_doc_row(doc: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        _number(doc.get("gid")) or 1,
+        _number(doc.get("sid")),
+        _number(doc.get("rev")),
+        doc.get("msg"),
+        doc.get("doc_url"),
+        doc.get("rule_category"),
+        doc.get("rule_explanation"),
+        doc.get("what_to_look_for"),
+        doc.get("false_positives"),
+        doc.get("known_usage"),
+        doc.get("rule_vulnerability"),
+        doc.get("cve_ids"),
+        doc.get("mitre_id"),
+        doc.get("contributors"),
+        doc.get("rule_groups"),
+    )
+
+
+def _import_rule_docs(
+    connection: sqlite3.Connection, path: Path | None, pages: Path | None = None,
+) -> int:
     """Talos's documentation of each Snort rule it documents, in
-    talos_rule_docs; the rules it has no page for are left out."""
-    documents = json.loads(path.read_text(encoding="utf-8"))
+    talos_rule_docs: the local copy, then the downloaded pages over it. A
+    rule Talos has no page for is left out."""
     connection.executescript(RULE_DOCS_SQL)
-    rows = [
-        (
-            _number(doc.get("gid")) or 1,
-            _number(doc.get("sid")),
-            _number(doc.get("rev")),
-            doc.get("msg"),
-            doc.get("doc_url"),
-            doc.get("rule_category"),
-            doc.get("rule_explanation"),
-            doc.get("what_to_look_for"),
-            doc.get("false_positives"),
-            doc.get("known_usage"),
-            doc.get("rule_vulnerability"),
-            doc.get("cve_ids"),
-            doc.get("mitre_id"),
-            doc.get("contributors"),
-        )
-        for doc in documents.values()
-        if str(doc.get("doc_found")) == "1" and _number(doc.get("sid")) is not None
-    ]
+    documents: dict[tuple[int, int], dict[str, Any]] = {}
+    files = []
+    if path is not None and path.is_file():
+        files.append(path)
+        for doc in json.loads(path.read_text(encoding="utf-8")).values():
+            key = (_number(doc.get("gid")) or 1, _number(doc.get("sid")))
+            if str(doc.get("doc_found")) == "1" and key[1] is not None:
+                documents[key] = doc
+    if pages is not None and pages.is_file():
+        files.append(pages)
+        for line in pages.read_text(encoding="utf-8").splitlines():
+            try:
+                doc = json.loads(line)
+            except ValueError:
+                continue
+            key = (_number(doc.get("gid")) or 1, _number(doc.get("sid")))
+            if str(doc.get("doc_found")) == "1" and key[1] is not None:
+                documents[key] = {"rev": documents.get(key, {}).get("rev"), **doc}
     connection.executemany(
-        f"INSERT OR REPLACE INTO talos_rule_docs VALUES ({', '.join('?' * 14)})", rows
+        f"INSERT OR REPLACE INTO talos_rule_docs VALUES ({', '.join('?' * 15)})",
+        [_rule_doc_row(doc) for doc in documents.values()],
     )
     count = connection.execute("SELECT COUNT(*) FROM talos_rule_docs").fetchone()[0]
-    as_of = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).date().isoformat()
-    _write_source_metadata(connection, "talos_rule_docs", as_of, None, count, [path])
+    if files:
+        as_of = max(
+            datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc) for file in files
+        ).date().isoformat()
+        _write_source_metadata(connection, "talos_rule_docs", as_of, None, count, files)
     return count
+
+
+def _import_builtin_docs(connection: sqlite3.Connection, path: Path | None) -> int:
+    """Snort's own description of each built-in rule (builtin_stubs.txt: a
+    line ``gid:sid``, then the description), in snort_builtin_docs."""
+    if path is None or not path.is_file():
+        return 0
+    connection.executescript(BUILTIN_DOCS_SQL)
+    descriptions: dict[tuple[int, int], list[str]] = {}
+    current: list[str] | None = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = _BUILTIN_ID_RE.match(line)
+        if match:
+            current = descriptions.setdefault((int(match.group(1)), int(match.group(2))), [])
+        elif current is not None:
+            current.append(line.strip())
+    rows = [
+        (gid, sid, " ".join(" ".join(lines).split()))
+        for (gid, sid), lines in descriptions.items()
+        if " ".join(lines).strip()
+    ]
+    connection.executemany("INSERT OR REPLACE INTO snort_builtin_docs VALUES (?, ?, ?)", rows)
+    as_of = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).date().isoformat()
+    _write_source_metadata(connection, "snort_builtin_docs", as_of, None, len(rows), [path])
+    return len(rows)
 
 
 def add_rule_docs(
     database: str | Path = DEFAULT_DB_PATH,
-    rule_docs_path: str | Path = DEFAULT_RULE_DOCS_PATH,
+    rule_docs_path: str | Path | None = DEFAULT_RULE_DOCS_PATH,
+    talos_pages_path: str | Path | None = DEFAULT_TALOS_PAGES_PATH,
+    builtin_stubs_path: str | Path | None = DEFAULT_BUILTIN_STUBS_PATH,
 ) -> dict[str, Any]:
-    """Talos's rule documentation put in an existing database (replacing what
-    it had of it): on a copy, which then replaces the database whole, so a
-    reader or download in progress keeps the old one."""
+    """The Snort rule documentation (Talos's, and Snort's own for its
+    built-in rules) put in an existing database, replacing what it had of
+    it: on a copy, which then replaces the database whole, so a reader or
+    download in progress keeps the old one."""
     target = Path(database).expanduser().resolve()
-    docs = Path(rule_docs_path).expanduser().resolve()
     if not target.is_file():
         raise FileNotFoundError(f"Database does not exist: {target}")
-    if not docs.is_file():
-        raise FileNotFoundError(f"Input file does not exist: {docs}")
+
+    def resolved(path: str | Path | None) -> Path | None:
+        return Path(path).expanduser().resolve() if path is not None else None
+
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
     )
@@ -734,7 +805,12 @@ def add_rule_docs(
         shutil.copymode(target, temporary)
         connection = sqlite3.connect(temporary)
         try:
-            count = _import_rule_docs(connection, docs)
+            counts = {
+                "talos_rule_docs": _import_rule_docs(
+                    connection, resolved(rule_docs_path), resolved(talos_pages_path)
+                ),
+                "snort_builtin_docs": _import_builtin_docs(connection, resolved(builtin_stubs_path)),
+            }
             connection.commit()
             check = connection.execute("PRAGMA quick_check").fetchone()[0]
             if check != "ok":
@@ -745,7 +821,7 @@ def add_rule_docs(
     finally:
         if temporary.exists():
             temporary.unlink()
-    return {"database": str(target), "counts": {"talos_rule_docs": count}}
+    return {"database": str(target), "counts": counts}
 
 
 def import_sources(
@@ -757,6 +833,8 @@ def import_sources(
     output_path: str | Path = DEFAULT_DB_PATH,
     replace: bool = False,
     rule_docs_path: str | Path | None = DEFAULT_RULE_DOCS_PATH,
+    talos_pages_path: str | Path | None = DEFAULT_TALOS_PAGES_PATH,
+    builtin_stubs_path: str | Path | None = DEFAULT_BUILTIN_STUBS_PATH,
 ) -> dict[str, Any]:
     """Build a validated database from local files and atomically publish it."""
     target = Path(output_path).expanduser().resolve()
@@ -824,10 +902,15 @@ def import_sources(
                 connection, "mitre_attack", date, version, counts["mitre_attack"], [mitre_file]
             )
 
-            if rule_docs_path is not None and Path(rule_docs_path).is_file():
-                counts["talos_rule_docs"] = _import_rule_docs(
-                    connection, Path(rule_docs_path).expanduser().resolve()
-                )
+            counts["talos_rule_docs"] = _import_rule_docs(
+                connection,
+                Path(rule_docs_path).expanduser().resolve() if rule_docs_path else None,
+                Path(talos_pages_path).expanduser().resolve() if talos_pages_path else None,
+            )
+            counts["snort_builtin_docs"] = _import_builtin_docs(
+                connection,
+                Path(builtin_stubs_path).expanduser().resolve() if builtin_stubs_path else None,
+            )
 
             connection.commit()
 
@@ -864,14 +947,25 @@ def main() -> None:
         "--add-rule-docs",
         action="store_true",
         help=(
-            "Only put Talos's rule documentation (--rule-docs) in the existing "
-            "database at --output; the other sources are kept."
+            "Only put the Snort rule documentation (--rule-docs, --talos-pages, "
+            "--builtin-stubs) in the existing database at --output; the other "
+            "sources are kept."
         ),
     )
     parser.add_argument(
         "--rule-docs",
         default=str(DEFAULT_RULE_DOCS_PATH),
         help="Talos's rule documentation, by SID (default: data/json/rule_docs_preprocessed_by_sid.json).",
+    )
+    parser.add_argument(
+        "--talos-pages",
+        default=str(DEFAULT_TALOS_PAGES_PATH),
+        help="The pages scripts/download_talos_docs.py saved (default: data/intel/sources/talos/rule_docs.jsonl).",
+    )
+    parser.add_argument(
+        "--builtin-stubs",
+        default=str(DEFAULT_BUILTIN_STUBS_PATH),
+        help=f"Snort's descriptions of its built-in rules (default: {DEFAULT_BUILTIN_STUBS_PATH}).",
     )
     parser.add_argument(
         "--nvd-path",
@@ -898,7 +992,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.add_rule_docs:
-        print(json.dumps(add_rule_docs(args.output, args.rule_docs), indent=2))
+        print(json.dumps(add_rule_docs(
+            args.output, args.rule_docs, args.talos_pages, args.builtin_stubs,
+        ), indent=2))
         return
     missing = [
         option for option, value in (
@@ -916,6 +1012,8 @@ def main() -> None:
         output_path=args.output,
         replace=args.replace,
         rule_docs_path=args.rule_docs,
+        talos_pages_path=args.talos_pages,
+        builtin_stubs_path=args.builtin_stubs,
     )
     print(json.dumps(result, indent=2))
 

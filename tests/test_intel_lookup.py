@@ -60,7 +60,23 @@ def _intel(tmp_path):
     connection.close()
     docs = tmp_path / "docs.json"
     docs.write_text(json.dumps(TALOS_DOCS))
-    assert add_rule_docs(path, docs)["counts"] == {"talos_rule_docs": 1}
+    # Pages download_talos_docs.py saved: one the local copy lacks, one with
+    # no page (which leaves the local copy's alone).
+    pages = tmp_path / "rule_docs.jsonl"
+    pages.write_text("\n".join(json.dumps(page) for page in (
+        {"gid": 3, "sid": 34051, "doc_found": 1, "msg": "PROTOCOL-DNS Cisco ASA",
+         "rule_category": "PROTOCOL-DNS -- DNS issues.", "rule_explanation": "The ASA runs out of memory.",
+         "mitre_id": "T1499, T1190"},
+        {"gid": 1, "sid": 31978, "doc_found": 0},
+    )) + "\n")
+    stubs = tmp_path / "builtin_stubs.txt"
+    stubs.write_text(
+        "116:444\n\n(ipv4) IPv4 option set\n\n122:23\n\nFiltered one host to many hosts UDP portsweep\n"
+        "where multiple ports are scanned\n\n"
+    )
+    assert add_rule_docs(path, docs, pages, stubs)["counts"] == {
+        "talos_rule_docs": 2, "snort_builtin_docs": 2,
+    }
     return path
 
 
@@ -98,6 +114,7 @@ def test_a_combined_file_is_enriched_with_talos_cves_and_techniques(tmp_path):
     assert found["attack_techniques"]["T1190"]["description"] == "Adversaries may exploit a weakness."
     assert found["unknown"] == ["CVE-1999-0001"]
     assert found["sources"]["nvd"] == "2026-11-17"
+    assert set(found["sources"]) == {"nvd", "talos_rule_docs", "snort_builtin_docs"}
     assert lookup(db, ["cve_2014_6271"])["cves"].keys() == {"CVE-2014-6271"}
 
     text = prompt_text(db, json.dumps(combined))
@@ -110,3 +127,62 @@ def test_a_combined_file_is_enriched_with_talos_cves_and_techniques(tmp_path):
     assert "  CISA Known Exploited Vulnerability since 2022-01-28: Shellshock." in text
     assert "ATT&CK T1190: Exploit Public-Facing Application\n  Tactics: initial-access" in text
     assert text.endswith("Not in the database: CVE-1999-0001\n")
+
+
+def test_downloaded_pages_and_builtin_descriptions_are_looked_up(tmp_path):
+    db = _intel(tmp_path)
+
+    found = lookup(db, ["snort_signature:3:34051:1", "snort_signature:122:23:1", "snort_signature:116:1:1"])
+
+    assert found["rules"]["snort_signature:3:34051:1"]["talos_documentation"]["attack_techniques"] == [
+        "T1499", "T1190",
+    ]
+    assert found["rules"]["snort_signature:122:23:1"] == {"snort_documentation": {
+        "description": "Filtered one host to many hosts UDP portsweep where multiple ports are scanned",
+    }}
+    assert "snort_signature:116:1:1" not in found["rules"]
+    text = prompt_text(db, "snort_signature:122:23:1")
+    assert (
+        "Rule snort_signature:122:23:1: Snort's description of this built-in rule\n"
+        "  Description: Filtered one host to many hosts UDP portsweep where multiple ports are scanned"
+    ) in text
+
+
+def test_a_talos_page_is_read_into_the_local_copys_fields():
+    from scripts.download_talos_docs import parse_page
+
+    page = """<h1>x</h1><!-- TABBED CONTENT BEGIN -->
+      <h3>Rule Category</h3><p>OS-OTHER -- Attacks on other systems.</p>
+      <h3>Alert Message</h3><p>OS-OTHER Bash CGI environment variable injection attempt</p>
+      <h3>Rule Explanation</h3><p class="rule-explanation">GNU Bash runs trailing strings.
+Impact:
+CVSS base score 10.0
+Details:
+Ease of Attack:
+</p>
+      <h3>What To Look For</h3><p>No information provided</p>
+      <h3>Known Usage</h3><p>No public information</p>
+      <h3>False Positives</h3><p>No known false positives</p>
+      <h3>Contributors</h3><p>Cisco Talos Intelligence Group</p>
+      <h3>Rule Groups</h3><p class="rg-fqn">MITRE::ATT&amp;CK Framework::Enterprise::Reconnaissance::Active Scanning</p>
+        <p class="rg-description hidden">Adversaries scan.</p><p class="rg-mitre-id hidden">T1595</p>
+      <h3 class="cve-header">CVE</h3><div><span class="cve-entry"><a href="#CVE-2014-6271">CVE-2014-6271</a></span>
+        <span class="cve-entry"><a href="#CVE-2014-7169">CVE-2014-7169</a></span></div>
+      <h3>Rule Vulnerability</h3><p class="rule_vulnerability">
+              Command Injection
+            </p><p class="rule_vulnerability_blurb">Unsafe input reaches a shell.</p>
+      <h3>CVE Additional Information</h3><p>This product uses data from the NVD API</p>"""
+
+    assert parse_page(page) == {
+        "msg": "OS-OTHER Bash CGI environment variable injection attempt",
+        "rule_category": "OS-OTHER -- Attacks on other systems.",
+        "rule_explanation": "GNU Bash runs trailing strings.\nImpact:\nCVSS base score 10.0\nDetails:\nEase of Attack:",
+        "what_to_look_for": "",
+        "known_usage": "",
+        "false_positives": "",
+        "contributors": "Cisco Talos Intelligence Group",
+        "rule_groups": "MITRE::ATT&CK Framework::Enterprise::Reconnaissance::Active Scanning",
+        "mitre_id": "T1595",
+        "cve_ids": "CVE-2014-6271, CVE-2014-7169",
+        "rule_vulnerability": "Command Injection\nUnsafe input reaches a shell.",
+    }

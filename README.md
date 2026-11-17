@@ -101,7 +101,8 @@ network interface (afpacket)
   `python llm_receiver.py`; standard library only); the old alerts' zips
   are at the bottom. The file has no enrichment: the LLM PC fetches the
   threat-intel database from the dashboard (`/intel/intel.db`: NVD, EPSS,
-  CISA KEV, MITRE ATT&CK and Talos's Snort rule documentation) and writes
+  CISA KEV, MITRE ATT&CK, Talos's Snort rule documentation and Snort's own
+  description of its built-in rules) and writes
   what it says of each file's rules, CVEs and ATT&CK techniques as text for
   the LLM's prompt with `scripts/intel_lookup.py`
   (`python intel_lookup.py download http://<dashboard>:8501/`, then
@@ -117,7 +118,7 @@ network interface (afpacket)
 | `src/ids/` | The shared code: settings, database, tailer, normalizer, screen data, combined export, rule and intel lookups, rule index builder |
 | `web/` | The React page (TypeScript, Vite) |
 | `deploy/` | systemd services, the engines' settings for this lab, log rotation ([deploy/README.md](deploy/README.md)) |
-| `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts; `backup_database.py` and `restore_backup.py` back the database up and put it back; `send_test_alert.py` is the hourly test alert; `llm_receiver.py` and `intel_lookup.py` run on the LLM PC (receive Sends; fetch the intel database and look up a file's CVEs and techniques) |
+| `scripts/` | `download_intel_sources.py` downloads the threat-intel sources and builds the database from them with `import_offline_intelligence.py`; `save_rule_counts.py` saves the engines' rule counts; `backup_database.py` and `restore_backup.py` back the database up and put it back; `send_test_alert.py` is the hourly test alert; `download_talos_docs.py` saves every Snort rule's Talos page once, for the database; `llm_receiver.py` and `intel_lookup.py` run on the LLM PC (receive Sends; fetch the intel database and look up a file's CVEs and techniques) |
 | `config/lab_phases.json` | The lab's attacker addresses, for the dashboard's warnings |
 | `data/` | Data each machine builds or downloads ([data/README.md](data/README.md)) |
 | `alert-archive/` | The alerts older than the database keeps, in 10-day zips (see [Old alerts](#old-alerts)) |
