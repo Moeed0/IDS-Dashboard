@@ -62,7 +62,6 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <span className="header-note muted">Times are PKT (UTC+05:00)</span>
       </header>
       {options ? (
         <Screens

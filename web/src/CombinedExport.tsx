@@ -1,7 +1,7 @@
 // The alerts the Alert Explorer's filters choose, as one combined JSON file
 // (see docs/combined-json-format.md): two buttons, to download it or send it
 // to the LLM PC, whose hover text says what the file would hold. Only the
-// outcome of a click is written out.
+// outcome of a click is written out, a success for a few seconds.
 import { useEffect, useState } from "react";
 import {
   NAMES,
@@ -19,6 +19,8 @@ import { stamp } from "./time";
 
 // As often as the lists' newest alerts.
 const INFO_REFRESH_MS = 10_000;
+// How long "Saved …" or "Sent …" stays.
+export const DONE_SHOWN_MS = 5_000;
 
 /** What the file would hold, in words: "40 alerts (Snort 20 · Suricata 20)". */
 export function holding(options: Options, info: SelectionInfo): string {
@@ -42,6 +44,12 @@ export function CombinedExport({
   // Other filters choose other alerts: the last result was about those.
   const chosen = JSON.stringify(params);
   useEffect(() => setResult(null), [chosen]);
+  // A done download or send says so for a few seconds; a failure stays.
+  useEffect(() => {
+    if (!result || result.failed) return;
+    const timer = window.setTimeout(() => setResult(null), DONE_SHOWN_MS);
+    return () => window.clearTimeout(timer);
+  }, [result]);
 
   async function run(kind: "download" | "send") {
     setBusy(kind);

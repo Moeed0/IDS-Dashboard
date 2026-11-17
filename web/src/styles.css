@@ -227,10 +227,6 @@ code {
   border-bottom: 1px solid var(--border);
 }
 
-.app header .header-note {
-  margin-left: auto;
-}
-
 /* The screen, with the status panel down its right side; above it on a
    narrow screen. */
 .layout {
