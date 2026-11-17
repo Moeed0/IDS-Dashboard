@@ -473,6 +473,13 @@ function Choice({
   );
 }
 
+/** What one table asks /alerts for: the filters' query and the page, with
+ *  the table's own engine side by side. A combined table has none of its
+ *  own and keeps the engine the filters chose. */
+export function tableRequest<Q extends object>(query: Q, engine: Engine | undefined, page: number) {
+  return { ...query, ...(engine ? { engine } : {}), page };
+}
+
 // Page 1 holds the newest alerts and is fetched again this often. Other pages
 // stay as they are, so that their rows don't move while they are read.
 const NEWEST_REFRESH_MS = 10_000;
@@ -501,7 +508,7 @@ function AlertTable({
 }) {
   const { data, error } = useApi<AlertPage>(
     "/alerts",
-    { ...query, engine, page },
+    tableRequest(query, engine, page),
     onUnauthorized,
     page === 1 ? NEWEST_REFRESH_MS : 0,
   );
@@ -509,7 +516,7 @@ function AlertTable({
   const shades = usePacketShades(data?.rows ?? []);
   // The alerts that came in since the last answer light up briefly: on the
   // first page of the same list only.
-  const listed = JSON.stringify([query, engine]);
+  const listed = JSON.stringify(tableRequest(query, engine, 1));
   const seen = useRef<{ list: string; ids: Set<number> } | null>(null);
   const fresh = useMemo(
     () => arrived(page === 1 && seen.current?.list === listed ? seen.current.ids : null, data?.rows ?? []),

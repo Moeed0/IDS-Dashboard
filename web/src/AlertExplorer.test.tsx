@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ruleEntry } from "./AlertDetail";
-import { SeverityCircles, arrived, filledCircles, packetKey, packetShades } from "./AlertExplorer";
+import { SeverityCircles, arrived, filledCircles, packetKey, packetShades, tableRequest } from "./AlertExplorer";
 import type { AlertRow } from "./api";
 
 /** A row on ``packet``; the list puts the newest first. */
@@ -79,5 +79,17 @@ describe("ruleEntry", () => {
     expect(ruleEntry({ "snort:116:444:rev1": { rule_text: "b" } }, alert)).toEqual({ rule_text: "b" });
     expect(ruleEntry({ "suricata:2001119": {} }, alert)).toBeNull();
     expect(ruleEntry(undefined, alert)).toBeNull();
+  });
+});
+
+describe("tableRequest", () => {
+  it("keeps the engine the filters chose in the combined list", () => {
+    // The combined table has no engine of its own: Snort chosen means Snort.
+    expect(tableRequest({ engine: "snort", last: 20 }, undefined, 2)).toEqual({ engine: "snort", last: 20, page: 2 });
+    expect(tableRequest({ last: 20 }, undefined, 1)).toEqual({ last: 20, page: 1 });
+  });
+
+  it("asks each side-by-side table for its own engine", () => {
+    expect(tableRequest({ last: 20 }, "suricata", 1)).toEqual({ last: 20, engine: "suricata", page: 1 });
   });
 });
