@@ -42,7 +42,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
-from ids.alert_classification import is_pass_through_action
 from ids.community_id import community_id, protocol_number
 from ids.config import KNOWN_ENGINES
 from ids.extended_alert_intelligence import (
@@ -56,11 +55,10 @@ from ids.extended_alert_intelligence import (
     MEANING_NOTE_CAVEAT,
     MEANING_WITHOUT_CVES,
 )
-from ids.export_cleanup import drop_default_gid
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "9.4"
+SCHEMA_VERSION = "10.0"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -77,34 +75,21 @@ WINDOW_LENGTHS = {
     "7 days": timedelta(days=7),
 }
 
-# Fields left out of ids_output: capture interface, device identifiers,
-# internal counters and IDs, and values restated as the detection time.
-_DROPPED_FIELDS = {
-    "snort": {
-        "iface", "vlan", "eth_src", "eth_dst", "eth_type", "ip_id",
-        "pkt_num", "timestamp", "b64_data",
-    },
-    "suricata": {
-        "in_iface", "flow_id", "event_type", "suricata_version", "tx_id",
-        "timestamp", "pcap_cnt", "packet", "packet_info", "payload", "host",
-        "capture_file", "pcap_filename", "ip_v",
-    },
-}
-# Values that only say "a normal captured packet" or "not identified".
-_DEFAULT_VALUES = {
-    "pkt_src": "wire/pcap",
-    "app_proto": "failed",
-    "service": "unknown",
-}
-# DNS bookkeeping: transaction IDs, header flags and the log format version.
-_DROPPED_DNS_FIELDS = {"id", "tx_id", "version", "opcode", "flags", "rd"}
-# Suricata rule metadata about rule maintenance and placement, not traffic.
-_DROPPED_RULE_METADATA = {
-    "created_at", "updated_at", "reviewed_at", "performance_impact",
-    "deployment", "former_category",
-}
-_DROPPED_METADATA_VALUES = {"Description_Generated_By_Proofpoint_Nexus"}
-_UNINFORMATIVE_METADATA = {"affected_product": ["Any"]}
+# A native value the file writes as-is even when it is empty (prune_empty
+# removes only the empty containers the splitting leaves behind).
+@dataclass(frozen=True)
+class _Kept:
+    value: Any
+
+    def __str__(self) -> str:
+        return "_Kept(" + json.dumps(self.value, sort_keys=True) + ")"
+
+
+# Suricata's field that holds a lossy text copy of the packet's payload, which
+# the rebuild derives from its raw ``packet`` when it says exactly the same.
+# An alert whose engine wrote none where the rebuild would derive one says so
+# with null (the only null the IDS output holds).
+_DERIVED_PAYLOAD_TEXT = "payload_printable"
 
 _LINK_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
 # One option of a Snort or Suricata rule ("name:value;" or "name;").
@@ -402,6 +387,51 @@ def _decode_header(data: bytes, linktype: Any) -> dict[str, int]:
     return header
 
 
+def _packet_payload(data: bytes, linktype: Any) -> bytes | None:
+    """The transport payload of a raw packet: after the TCP, UDP or ICMP
+    header, up to the IP length (an Ethernet frame's padding is not part of
+    it). None when the packet can't be read that far."""
+    offset = 0
+    if linktype == _LINKTYPE_ETHERNET:
+        offset = 14
+        ethertype = int.from_bytes(data[12:14], "big") if len(data) >= 14 else None
+        while ethertype in _VLAN_ETHERTYPES and len(data) >= offset + 4:
+            ethertype = int.from_bytes(data[offset + 2:offset + 4], "big")
+            offset += 4
+        if ethertype not in {0x0800, 0x86DD}:
+            return None
+    elif linktype not in _LINKTYPES_RAW_IP:
+        return None
+    if len(data) < offset + 20:
+        return None
+    version = data[offset] >> 4
+    if version == 4:
+        end = offset + int.from_bytes(data[offset + 2:offset + 4], "big")
+        protocol = data[offset + 9]
+        if int.from_bytes(data[offset + 6:offset + 8], "big") & 0x3FFF:
+            return None  # a fragment
+        offset += (data[offset] & 0x0F) * 4
+    elif version == 6 and len(data) >= offset + 40:
+        end = offset + 40 + int.from_bytes(data[offset + 4:offset + 6], "big")
+        protocol = data[offset + 6]
+        offset += 40
+        while protocol in _IPV6_EXTENSIONS and len(data) >= offset + 8:
+            protocol, offset = data[offset], offset + (data[offset + 1] + 1) * 8
+        if protocol == _IPV6_FRAGMENT:
+            return None
+    else:
+        return None
+    if end > len(data):
+        return None
+    if protocol == 6 and end >= offset + 20:
+        offset += (data[offset + 12] >> 4) * 4
+    elif protocol in {1, 17, 58} and end >= offset + 8:
+        offset += 8
+    else:
+        return None
+    return data[offset:end] if offset <= end else None
+
+
 def _packet_header(engine: str, native: Mapping[str, Any]) -> dict[str, int]:
     """Snort writes the header values itself (not for a reassembled TCP
     segment); Suricata writes the raw packet when eve's alert ``packet``
@@ -443,56 +473,85 @@ def _message(engine: str, row: Mapping[str, Any], native: Mapping[str, Any]) -> 
 
 
 def ids_output(engine: str, native: Mapping[str, Any]) -> dict[str, Any]:
-    """The engine's own alert fields, without links, noise or empty values."""
-    dropped = _DROPPED_FIELDS.get(engine, set())
-    output = {
-        key: value for key, value in native.items()
-        if key not in dropped and _DEFAULT_VALUES.get(key) != value
-    }
-    # Snort writes the action at the top level, Suricata inside "alert".
-    if is_pass_through_action(output.get("action")):
-        del output["action"]
-    alert = _dict(output.get("alert"))
-    if alert:
-        alert = {
-            key: value for key, value in alert.items()
-            if not (key == "action" and is_pass_through_action(value))
-        }
-        metadata = _dict(alert.get("metadata"))
-        if metadata:
-            alert["metadata"] = {
-                key: (
-                    [item for item in values if item not in _DROPPED_METADATA_VALUES]
-                    if isinstance(values, list) else values
-                )
-                for key, values in metadata.items()
-                if key not in _DROPPED_RULE_METADATA
-                and _UNINFORMATIVE_METADATA.get(key) != values
-            }
-        output["alert"] = alert
-    dns = _dict(output.get("dns"))
-    if dns:
-        output["dns"] = {
-            key: value for key, value in dns.items()
-            if key not in _DROPPED_DNS_FIELDS
-        }
-    # Snort's payload (b64_data) as text, as Suricata's payload_printable (9.3).
-    if engine == "snort" and native.get("b64_data"):
-        output["payload_printable"] = printable_payload(native["b64_data"])
-    return prune_empty(drop_default_gid(strip_links(output)))
+    """The engine's own record, whole: every field it wrote, as it wrote it
+    (an empty value kept as such)."""
+    def keep(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: keep(item) for key, item in value.items()} if value else _Kept({})
+        if isinstance(value, list):
+            return [keep(item) for item in value] if value else _Kept([])
+        if value is None or value == "":
+            return _Kept(value)
+        return value
+
+    return {key: keep(item) for key, item in native.items()}
 
 
-def printable_payload(encoded: Any) -> str:
-    """Base64 bytes as text, the way Suricata writes payload_printable:
-    printable ASCII, tabs and line breaks kept, every other byte a dot. ""
-    when it isn't Base64."""
-    try:
-        raw = base64.b64decode(str(encoded), validate=True)
-    except (ValueError, TypeError):
-        return ""
-    return "".join(
-        chr(byte) if 32 <= byte < 127 or byte in (9, 10, 13) else "." for byte in raw
+def _unwrap(value: Any) -> Any:
+    if isinstance(value, _Kept):
+        return value.value
+    if isinstance(value, dict):
+        return {key: _unwrap(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unwrap(item) for item in value]
+    return value
+
+
+def engine_time(engine: str, time_us: int) -> str:
+    """A packet time the way the engine writes its ``timestamp``: Snort
+    ``MM/DD-HH:MM:SS.ffffff``, Suricata ISO 8601 with a ``+0500`` offset,
+    both in local time (PKT)."""
+    moment = datetime.fromtimestamp(time_us // 1_000_000, tz=PKT).replace(
+        microsecond=time_us % 1_000_000
     )
+    if engine == "snort":
+        return moment.strftime("%m/%d-%H:%M:%S.%f")
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+
+
+def engine_address(engine: str, address: Any) -> Any:
+    """An address the way the engine writes it: Suricata writes IPv6 in full
+    (``ff02:0000:…:0016``), Snort shortened (``ff02::16``)."""
+    try:
+        parsed = ipaddress.ip_address(str(address))
+    except ValueError:
+        return address
+    return parsed.exploded if engine == "suricata" and parsed.version == 6 else str(parsed)
+
+
+def _packet_text(native: Mapping[str, Any]) -> str | None:
+    """Suricata's raw ``packet``'s payload as payload_printable text, or None
+    when there's no packet or it can't be read."""
+    packet = native.get("packet")
+    if not isinstance(packet, str) or not packet:
+        return None
+    try:
+        data = base64.b64decode(packet, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    payload = _packet_payload(data, _dict(native.get("packet_info")).get("linktype"))
+    if payload is None:
+        return None
+    return "".join(
+        chr(byte) if 32 <= byte < 127 or byte in (9, 10, 13) else "." for byte in payload
+    )
+
+
+def _without_derived(engine: str, output: dict[str, Any], time_us: int) -> dict[str, Any]:
+    """The output without the fields the rebuild derives exactly: the engine's
+    ``timestamp`` (from the alert's time) and Suricata's payload_printable
+    (from its raw packet). A field is left out only when the derived value is
+    the one the engine wrote."""
+    if output.get("timestamp") == engine_time(engine, time_us):
+        del output["timestamp"]
+    if engine == "suricata":
+        derived = _packet_text(output)
+        if derived:
+            if _DERIVED_PAYLOAD_TEXT not in output:
+                output[_DERIVED_PAYLOAD_TEXT] = _Kept(None)
+            elif output[_DERIVED_PAYLOAD_TEXT] == derived:
+                del output[_DERIVED_PAYLOAD_TEXT]
+    return output
 
 
 # Fields of the IDS output that describe the rule. Each is given once, in the
@@ -960,8 +1019,10 @@ def _same_as_packet(engine: str, field: str, value: Any, fact: Any) -> bool:
     if fact is None:
         return False
     if field in {"src_addr", "dst_addr", "src_ip", "dest_ip"}:
-        # Suricata writes IPv6 in full, Snort and the packet in short form.
-        return _address(value) == fact
+        # Suricata writes IPv6 in full, Snort and the packet in short form:
+        # left out only when the engine's spelling of the packet's address is
+        # exactly what it wrote.
+        return engine_address(engine, fact) == value
     if field == "proto":
         # Suricata calls ICMPv6 "IPv6-ICMP". Snort calls IGMP "IP", which
         # names less than the packet does: kept.
@@ -1164,7 +1225,8 @@ def _stated_rule_ids(name: str, rule_text: Any) -> dict[str, Any]:
     """The GID, SID, revision and message a rule's name and rule text give."""
     named = _rule_name_ids(name)
     return {
-        "gid": named["gid"],
+        # A rule's name gives its GID when it isn't 1, the GID of text rules.
+        "gid": named["gid"] if named["gid"] is not None else 1,
         "sid": named["sid"],
         "rev": named["rev"] if named["rev"] is not None else _rule_text_option(rule_text, "rev"),
         "msg": _rule_text_option(rule_text, "msg"),
@@ -1215,10 +1277,13 @@ def rebuild_ids_output(
     """One alert's whole IDS output from the file: its rule's part, its
     flow's part, its packet's shared part and its own part, then the fields
     its rule's name and rule text give and the fields that say what the
-    packet is. Addresses come back in one spelling (IPv6 shortened)."""
+    packet is, each in the engine's own spelling, and the fields derived
+    from the alert's time and Suricata's raw packet: exactly the record the
+    engine wrote."""
     rule_entry = _dict(_dict(document.get("rules")).get(rule))
     flow = _dict(_dict(document.get("flows")).get(str(packet.get("flow"))))
     output = _merged(
+        _dict(_dict(document.get("ids_output")).get(engine)),
         _dict(rule_entry.get("ids_output")),
         _dict(flow.get(engine)),
         _dict(_dict(packet.get("ids_output")).get(engine)),
@@ -1245,15 +1310,32 @@ def rebuild_ids_output(
     spelling = {
         alias.upper(): name for name, alias in _PROTOCOL_ALIASES.get(engine, {}).items()
     }
+    def spelled(field: str, value: Any) -> Any:
+        if field == "proto":
+            return spelling.get(str(value).upper(), value)
+        if field in {"src_addr", "dst_addr", "src_ip", "dest_ip"}:
+            return engine_address(engine, value)
+        return value
+
     for field, fact in _PACKET_FIELDS[engine].items():
         if field not in output and facts[fact] is not None:
-            value = facts[fact]
-            output[field] = spelling.get(str(value).upper(), value) if field == "proto" else value
+            output[field] = spelled(field, facts[fact])
     flow_output = output.get("flow")
     endpoints = _flow_endpoints(output) if engine == "suricata" and isinstance(flow_output, dict) else None
     for field, fact in (endpoints or {}).items():
         if field not in flow_output and facts[fact] is not None:
-            flow_output[field] = facts[fact]
+            flow_output[field] = spelled(field, facts[fact])
+
+    time_us = _parse_iso_us(entry.get("time") or packet.get("time"))
+    if "timestamp" not in output and time_us is not None:
+        output["timestamp"] = engine_time(engine, time_us)
+    if engine == "suricata":
+        if _DERIVED_PAYLOAD_TEXT not in output:
+            derived = _packet_text(output)
+            if derived:
+                output[_DERIVED_PAYLOAD_TEXT] = derived
+        elif output[_DERIVED_PAYLOAD_TEXT] is None:
+            del output[_DERIVED_PAYLOAD_TEXT]
     return output
 
 
@@ -1459,7 +1541,9 @@ def build_combined_detections(
     for index, packet in enumerate(packets):
         for match in packet.matches:
             outputs[id(match)] = _without_packet_fields(
-                match.engine, ids_output(match.engine, match.native), facts[index]
+                match.engine,
+                _without_derived(match.engine, ids_output(match.engine, match.native), match.time_us),
+                facts[index],
             )
             packet_of[id(match)] = index
 
@@ -1476,6 +1560,15 @@ def build_combined_detections(
         )
         for key, rule_matches in by_rule.items()
     }
+    outputs = {key: prune_empty(output) for key, output in outputs.items()}
+    # A field with one value on every alert of an engine in the file (its
+    # capture interface, its version, ...) is given once, in the file's
+    # ids_output, when the engine raised more than one alert.
+    engine_wide = {}
+    for engine in _ENGINE_ORDER:
+        engine_outputs = [outputs[id(match)] for match in matches if match.engine == engine]
+        if len(engine_outputs) > 1:
+            engine_wide[engine] = _take_common(engine_outputs, _leaf_paths(engine_outputs[0]))
     outputs = {key: prune_empty(output) for key, output in outputs.items()}
     for key, paths in _rule_wide(by_rule, packets, outputs, packet_of).items():
         if paths:
@@ -1551,6 +1644,8 @@ def build_combined_detections(
             "length": length,
         },
         "alerts": _alert_counts(matches),
+        # Per engine: what all its alerts in the file share, once.
+        "ids_output": engine_wide,
         # Each rule once for the whole file, by the name its alerts give: the
         # IDS output fields it gives on every alert, and its enrichment.
         "rules": {
@@ -1570,7 +1665,7 @@ def build_combined_detections(
             for index, (number, packet) in enumerate(enumerate(packets, start=1))
         ],
     }
-    return prune_empty(document)
+    return _unwrap(prune_empty(document))
 
 
 def _length_label(length: timedelta) -> str:

@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 9.4)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 10.0)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -10,12 +10,16 @@ timeline of the packets the two engines alerted on, oldest first:
 - a packet both engines alerted on is one entry with both parts, so what the
   packet is (time, protocol, addresses, ports) is written once.
 
-Every alert in the window is kept with the IDS's own output, and values that
-carry no information are left out. A file built from the Alert Explorer's
+Every alert in the window is kept with the IDS's whole output, exactly as the
+engine wrote it (10.0): every field, in the engine's own spelling, with its
+interface, MAC addresses, counters, IDs, links and empty values. A file built from the Alert Explorer's
 filters holds only the alerts they choose (a rule, a severity, an address,
 the newest 20, …): its window then says when, and other alerts of that time
 are not in it. Nothing is written twice (9.0):
 
+- what is the same for every alert of an engine in the file (its capture
+  interface, its version, the pass action) is given once in the top-level
+  `ids_output` (10.0);
 - what is the same for every alert of a rule is given once in `rules`;
 - what is the same for every alert of an engine on one connection is given
   once in `flows`;
@@ -23,7 +27,10 @@ are not in it. Nothing is written twice (9.0):
   `attack_techniques`, however many rules name it;
 - what says what the packet is is given once, with the packet, and so is
   what an engine's different alerts on one packet share (9.1);
-- what a rule's name or rule text states is not repeated in its IDS output.
+- what a rule's name or rule text states is not repeated in its IDS output;
+- what the alert's time and Suricata's raw packet already say (the engine's
+  `timestamp`, Suricata's `payload_printable`) is derived from them, not
+  written again (10.0).
 
 Each alert's whole record can be put back together exactly from these parts
 (see The IDS output in parts). The file is indented with two spaces (9.2), so
@@ -39,6 +46,7 @@ in every file.
 |---|---|
 | `window` | Start, end and length of the time window. Times are PKT (`+05:00`). The window ends where both engines' alerts are stored at the latest (see Window end). A file of the Alert Explorer's filters has the time range chosen, or with the newest N alerts (or no range) their own span in whole seconds (`"length": "104 seconds"`). |
 | `alerts` | How many alerts each engine raised in the window; an engine that raised none is left out (`{"snort": 3}`). |
+| `ids_output` | Per engine that raised more than one alert: the output fields with one value on every one of its alerts in the file (`{"snort": {"iface": "ens34", …}}`), given once (10.0). |
 | `rules` | Each rule that fired in the window, once: its IDS output fields and its enrichment. |
 | `cves` | Each CVE a rule names, once: NVD summary, CVSS, EPSS and CISA KEV. |
 | `attack_techniques` | Each ATT&CK technique a rule names, once: name and tactics. |
@@ -83,8 +91,8 @@ entry in `packets` is one such packet:
   unknown-Ethertype events).
 - `src`, `dst` — the packet's source and destination, as `address:port`
   (`[IPv6 address]:port`), or the address alone when the packet has no ports
-  (ICMP, IGMP). IPv6 addresses are in their short form (Suricata writes them in
-  full). Left out for frames without IP addresses (Snort's ARP checks).
+  (ICMP, IGMP). IPv6 addresses are in their short form; Suricata writes them
+  in full, and its record rebuilds that way. Left out for frames without IP addresses (Snort's ARP checks).
 - `icmp_type`, `icmp_code` — for ICMP packets.
 - `flow` — the number, in `flows`, of the packet's connection, when `flows`
   holds something about it.
@@ -131,8 +139,9 @@ A Snort and a Suricata alert are on the same packet when:
 - the IP ID, TCP sequence and acknowledgement numbers, and ICMP identifier and
   sequence agree wherever both engines give them. Snort writes these values in
   its alert; Suricata's are read from the raw packet it writes in eve's alert
-  `packet` (turned on 2 Nov 2026 at 11:48; earlier alerts have none). The raw
-  packet itself is not part of `ids_output`.
+  `packet` (turned on 2 Nov 2026 at 11:48; earlier alerts have none;
+  `deploy/apply-suricata-settings.sh` turns it on since 17 Nov 2026). The raw
+  packet is part of Suricata's `ids_output` (10.0).
 
 `matched_by` says `headers` when such header values were compared, and
 `time_and_addresses` when the engines gave none in common: Snort alerts on a
@@ -153,43 +162,60 @@ restarts), or Suricata the same time and raw packet.
 
 ### The IDS output in parts
 
-Each alert's whole record, as the engine wrote it (less the fields listed
-under What is left out), is these parts put together:
+Each alert's whole record, exactly as the engine wrote it, is these parts put
+together:
 
-1. the rule's `ids_output` in `rules`: the fields that describe the rule
-   (Snort `msg`, `class`, `priority`, `rev`; Suricata `alert.signature`,
-   `category`, `severity`, `rev`, `metadata`) when they have one value on
-   every alert of that rule in the file, and any other field with one value
-   on every alert of that rule when it fired on more than one packet. Such a
-   field moves to the rule only when every other rule in an entry with it
-   moves it too; otherwise the entry would split in two and repeat what is
-   left (9.1). A rule that fired on one packet moves what the other rules of
-   its entry move;
-2. the flow's part in `flows`, under the packet's `flow` and the engine's
+1. the engine's part in the file's top-level `ids_output`: the fields with one
+   value on every alert of that engine in the file (10.0);
+2. the rule's `ids_output` in `rules`: the fields that describe the rule
+   (Snort `msg`, `class`, `priority`, `gid`, `rev`, `rule`; Suricata
+   `alert.signature`, `category`, `severity`, `gid`, `rev`, `metadata`) when
+   they have one value on every alert of that rule in the file, and any other
+   field with one value on every alert of that rule when it fired on more
+   than one packet. Such a field moves to the rule only when every other rule
+   in an entry with it moves it too; otherwise the entry would split in two
+   and repeat what is left (9.1). A rule that fired on one packet moves what
+   the other rules of its entry move;
+3. the flow's part in `flows`, under the packet's `flow` and the engine's
    name (see Flows);
-3. the packet's shared part, `ids_output` under the engine's name on the
+4. the packet's shared part, `ids_output` under the engine's name on the
    packet, when the engine has more than one entry there;
-4. the entry's own `ids_output`: everything else;
-5. what the rule's name and rule text state: the SID, the GID when it is not
-   1, the revision (from a `:revN` name or the rule text's `rev`), the
-   message (the rule text's `msg`), and Snort's `rule` field, which is
-   `gid:sid:rev`. Each is left out of the rule's `ids_output` only when it
-   says exactly the same;
-6. the packet's fields, under the engine's own names: Snort `proto`,
-   `src_addr`, `src_port`, `dst_addr`, `dst_port`, `icmp_type`, `icmp_code`;
-   Suricata `proto`, `src_ip`, `src_port`, `dest_ip`, `dest_port`, `icmp_type`,
-   `icmp_code`, and in its `flow` block `src_ip`, `src_port`, `dest_ip`,
-   `dest_port` (the packet's source and destination, swapped when
-   `direction` is `to_client`). Such a field is left out when it says the
-   same as the packet; Suricata's `proto: "IPv6-ICMP"` is the packet's
-   `ICMPv6`. A value that differs stays, such as Snort's `proto: "IP"` for
-   IGMP.
+5. the entry's own `ids_output`: everything else;
+6. what the rule's name and rule text state: the SID, the GID (1 when the
+   name gives none), the revision (from a `:revN` name or the rule text's
+   `rev`), the message (the rule text's `msg`), and Snort's `rule` field,
+   which is `gid:sid:rev`. Each is left out of the rule's `ids_output` only
+   when it says exactly the same;
+7. the packet's fields, under the engine's own names and in its own
+   spelling: Snort `proto`, `src_addr`, `src_port`, `dst_addr`, `dst_port`,
+   `icmp_type`, `icmp_code`; Suricata `proto`, `src_ip`, `src_port`,
+   `dest_ip`, `dest_port`, `icmp_type`, `icmp_code`, and in its `flow` block
+   `src_ip`, `src_port`, `dest_ip`, `dest_port` (the packet's source and
+   destination, swapped when `direction` is `to_client`). Suricata writes
+   IPv6 in full (`ff02:0000:0000:0000:0000:0000:0000:0016`) and calls ICMPv6
+   `IPv6-ICMP`. Such a field is left out when it says exactly what the
+   packet does in that spelling; a value that differs stays, such as Snort's
+   `proto: "IP"` for IGMP;
+8. what the alert's time and Suricata's raw packet say (10.0):
+   - `timestamp` — the entry's `time` (or the packet's) in the engine's own
+     format, in local time (PKT): Snort `MM/DD-HH:MM:SS.ffffff`
+     (`11/17-13:38:07.235708`), Suricata ISO 8601 with a `+0500` offset;
+   - Suricata's `payload_printable` — the payload of its raw `packet` (after
+     the TCP, UDP or ICMP header, up to the IP length) as text: printable
+     ASCII, tabs and line breaks kept, any other byte a dot. When Suricata
+     wrote none for a packet that carries a payload, the entry says
+     `"payload_printable": null`, the only null in the IDS output, which
+     the rebuild removes.
+
+   Each is left out only when the derived value is exactly the one the
+   engine wrote; otherwise it stays, such as Suricata's text of reassembled
+   stream data, which is not the packet's own payload.
 
 The parts never hold the same field twice, so they can be merged key by key
 (inside `alert` and `flow` too). `ids.combined_detections.rebuild_ids_output`
-does this; the tests and a check on the live data (every alert of a 5-minute,
-1-hour and 24-hour window and of the lab attack replay) rebuild each alert's
-record exactly, with IPv6 addresses in their short form.
+does this; the tests and a check on the live data (all 2,081 alerts stored on
+17 Nov 2026 by 13:50) rebuild each alert's record exactly as the engine wrote
+it.
 
 ## Rules
 
@@ -244,6 +270,12 @@ named by its rules only.
 
 ## What is left out, and why
 
+Nothing of the engines' own output (10.0; until 9.4 the interface, MAC
+addresses, internal counters and IDs, the pass action, default values, DNS
+bookkeeping, rule upkeep metadata, web links and empty values were left out,
+so a record didn't rebuild exactly). What the file leaves out is in the
+enrichment it adds:
+
 - Sentences that hold for any alert, or for every rule of a kind (for example
   "review surrounding IDS alerts and host logs", "verify whether the
   destination runs an affected product", "built-in rules have no rule text"):
@@ -252,32 +284,17 @@ named by its rules only.
   what they are.
 - Recommended actions built only from a rule's CVE scores ("Check this
   destination first: CVE-… scores …"): `cves` gives the CVE and its scores.
-- The generator ID when it is the default GID 1, and Snort's `rule` field
-  (`gid:sid:rev`) with it.
-- The packet action while it only says the packet passed (`allow` /
-  `allowed`); both engines only watch a copy of the traffic. A blocking action
-  would be kept.
-- `pkt_src: "wire/pcap"` (a normal captured packet), Snort `service: "unknown"`
-  and Suricata `app_proto: "failed"` (not identified), and Suricata `ip_v`.
-- The engine's own timestamp field, which `time` states.
-- DNS bookkeeping: transaction IDs, header flags, opcode and the log format
-  version. The query names, record types, type and result code stay.
-- Suricata rule metadata about rule upkeep and placement: creation, update and
-  review dates, performance impact, deployment, former category, and
-  `affected_product: Any`.
-- Web links, interface names, MAC addresses, internal counters (`pkt_num`,
-  `flow_id`, `tx_id`) and empty values.
-- From a rule's documentation: its contributors, category text and
-  reference lists, and the vulnerability type "N/A".
+- Web links in the enrichment, and from a rule's documentation its
+  contributors, category text and reference lists, and the vulnerability
+  type "N/A".
 
-Kept as traffic evidence: the HTTP request path, HTTP headers such as an attack
-payload, host and query names, and (9.3) what the packet carried as text:
-Suricata's `payload_printable` and `http.http_request_body_printable` /
-`http_response_body_printable` (on since 12 November 2026), and Snort's
-`b64_data` given the same way, as `payload_printable` (printable ASCII, tabs
-and line breaks kept, any other byte a dot). Suricata's Base64 `payload` and
-`packet` are left out, as is Snort's `b64_data` itself: so Snort's record
-rebuilds with `payload_printable` in place of `b64_data`.
+What the packet carried is the engines' own: Snort's `b64_data` and
+Suricata's raw `packet`, in Base64, and Suricata's `payload_printable` and
+`http.http_request_body_printable` / `http_response_body_printable` as text
+(on since 12 November 2026). Suricata's `payload_printable` is derived from
+its raw packet when it is that packet's payload (see The IDS output in
+parts). 9.3 to 9.4 wrote Snort's `b64_data` as text instead; 10.0 keeps it as
+Snort wrote it and adds no text copy.
 
 Also kept: Snort's `app_id`, the application its OpenAppID detectors named
 for the flow (`"IGMP"`, `"ICMP for IPv6"`, `"UPnP"`, `"NetBIOS-ns"` ...; on
@@ -289,6 +306,11 @@ The dashboard calls it "App" and filters by it.
 
 ## What can still look repeated
 
+- Values that are the same on many but not all alerts of an engine: MAC
+  addresses (every packet through the router has its MAC), and Suricata's
+  `capture_file`, the pcap file each flow's packets went to, which stays the
+  same until the file reaches 100 MiB. Each belongs to its own packet or
+  flow.
 - Values of different packets that happen to be equal, such as a packet count
   of 1 on two one-packet connections, or the same TTL on packets of different
   rules. Each belongs to its own packet.

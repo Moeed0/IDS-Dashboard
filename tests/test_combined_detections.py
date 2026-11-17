@@ -498,10 +498,10 @@ def test_header_values_confirm_the_same_packet():
 
     packet, = document["packets"]
     assert packet["matched_by"] == "headers"
-    # The raw packet is evidence for matching, not output.
+    # The raw packet is the engine's own output too: kept.
     suricata = packet["suricata"][0]["ids_output"]
-    assert "packet" not in suricata
-    assert "packet_info" not in suricata
+    assert suricata["packet"]
+    assert suricata["packet_info"] == {"linktype": 1}
 
 
 def test_different_header_values_are_different_packets_even_when_close_in_time():
@@ -564,73 +564,33 @@ def test_snort_packet_numbers_that_start_again_are_different_packets():
     ]
 
 
-def test_ids_output_has_no_links_device_ids_internal_counters_or_empty_values():
+def test_ids_output_is_each_engines_whole_record():
+    snort_native, suricata_native = _snort_native(), _suricata_native()
     document = _build(
-        [_snort_row(), _suricata_row()], rule_intelligence=_intelligence
+        [_snort_row(snort_native), _suricata_row(suricata_native)], rule_intelligence=_intelligence
     )
-
-    def walk(value):
-        assert value not in (None, "", [], {})
-        if isinstance(value, str):
-            assert "://" not in value
-        elif isinstance(value, dict):
-            assert "gid" not in value
-            for item in value.values():
-                walk(item)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item)
-
-    walk(document)
 
     (snort_packet, _, snort_entry, snort_rule), (suricata_packet, _, suricata_entry, suricata_rule) = (
         _alerts(document)
     )
-    snort = _full_output(document, snort_packet, "snort", snort_entry, snort_rule)
-    suricata = _full_output(document, suricata_packet, "suricata", suricata_entry, suricata_rule)
-    for dropped in ("iface", "vlan", "eth_src", "eth_dst", "pkt_num", "timestamp"):
-        assert dropped not in snort
-    for dropped in (
-        "in_iface", "flow_id", "event_type", "suricata_version", "tx_id", "timestamp",
-        "ip_v", "pkt_src",
-    ):
-        assert dropped not in suricata
-    # Each engine's own record is kept whole, addresses and ports included.
-    assert (snort["src_addr"], snort["src_port"]) == ("192.168.50.141", 36788)
-    assert (snort["dst_addr"], snort["dst_port"]) == ("192.168.50.114", 80)
-    assert (snort["proto"], snort["service"]) == ("TCP", "http")
-    assert snort["flowstart_time"] == 1792061642
-    assert (suricata["src_ip"], suricata["dest_port"]) == ("192.168.50.141", 80)
-    assert suricata["community_id"] == "1:VtLM8w9QQw/rxKkhooBa20VkAO0="
-    assert suricata["app_proto"] == "http"
-    assert suricata["flow"]["start"] == "2026-10-15T15:54:02.659143+0500"
-    assert suricata["flow"]["bytes_toserver"] == 417
-    assert snort["dir"] == "C2S"
-    assert suricata["direction"] == "to_server"
-    # The engines only watch traffic, so "allow" / "allowed" says nothing.
-    assert "action" not in snort
-    assert "action" not in suricata["alert"]
-    # Every rule here has GID 1; Snort's gid:sid:rev field goes with it.
-    assert "rule" not in snort
-    assert (snort["sid"], snort["rev"]) == (31978, 5)
-    assert snort["class"] == "Attempted Administrator Privilege Gain"
-    assert snort["msg"] == "OS-OTHER Bash CGI environment variable injection attempt"
-    assert snort["pkt_gen"] == "stream_tcp"
-    assert suricata["alert"]["metadata"] == {
-        "confidence": ["Medium"],
-        "cve": ["CVE_2014_6271"],
-        "tag": ["CISA_KEV"],
-    }
-    # The request path and the payload header are traffic evidence; the
-    # web link in the Referer header is removed.
-    assert suricata["http"]["url"] == "/cgi-bin/test-cgi"
-    assert suricata["http"]["http_user_agent"] == "() { :; }; /bin/bash -c id"
-    assert "http_refer" not in suricata["http"]
-    assert "http_content_type" not in suricata["http"]
+    # Each engine's record rebuilds exactly: interface, MAC addresses,
+    # counters, IDs, the pass action, web links and empty values included.
+    assert _full_output(document, snort_packet, "snort", snort_entry, snort_rule) == snort_native
+    assert _full_output(document, suricata_packet, "suricata", suricata_entry, suricata_rule) == (
+        suricata_native
+    )
+    assert snort_entry["ids_output"]["iface"] == "ens38"
+    assert snort_entry["ids_output"]["pkt_num"] == 29745
+    assert snort_entry["ids_output"]["action"] == "allow"
+    suricata = suricata_entry["ids_output"]
+    assert suricata["http"]["http_refer"] == "http://192.168.50.114/index.html"
+    assert suricata["http"]["http_content_type"] == ""
+    assert (suricata["flow_id"], suricata["tx_id"]) == (579200695037415, 0)
 
     # The rule's output fields and enrichment are in the file's rules, the
     # packet's fields with the packet; each engine's part keeps the rest. The
-    # SID is in the rule's name, not repeated in its output.
+    # SID, and the GID when it is 1, are in the rule's name; the timestamp is
+    # the packet's time in the engine's own format.
     assert document["rules"] == {
         "snort:31978": {
             "ids_output": {
@@ -649,21 +609,17 @@ def test_ids_output_has_no_links_device_ids_internal_counters_or_empty_values():
                 "severity": 1,
                 "rev": 7,
                 "metadata": {
-                    "confidence": ["Medium"], "cve": ["CVE_2014_6271"], "tag": ["CISA_KEV"],
+                    "confidence": ["Medium"], "created_at": ["2014_09_25"],
+                    "cve": ["CVE_2014_6271"],
+                    "tag": ["Description_Generated_By_Proofpoint_Nexus", "CISA_KEV"],
                 },
             }},
             "why_triggered": "It alerts when the HTTP headers contain `() {`.",
             "cves": ["CVE-2014-6271"],
         },
     }
-    assert snort_entry["ids_output"] == {
-        "client_bytes": 351, "client_pkts": 3, "dir": "C2S", "flowstart_time": 1792061642,
-        "pkt_gen": "stream_tcp", "pkt_len": 109, "server_bytes": 140, "server_pkts": 2,
-        "service": "http",
-    }
-    assert set(suricata_entry["ids_output"]) == {
-        "app_proto", "community_id", "direction", "flow", "http",
-    }
+    for entry in (snort_entry, suricata_entry):
+        assert not {"timestamp", "gid", "rule", "src_addr", "src_ip", "proto"} & set(entry["ids_output"])
 
 
 def test_blocking_actions_are_kept_in_ids_output():
@@ -701,10 +657,10 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
     # (no engine alerted on two packets of one connection, so there are no
     # flows); no sessions, summary, guidance or classification.
     assert list(document) == [
-        "schema", "schema_version", "generated_at", "window", "alerts", "rules",
-        "packets",
+        "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
+        "rules", "packets",
     ]
-    assert document["schema_version"] == "9.4"
+    assert document["schema_version"] == "10.0"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -822,10 +778,8 @@ def test_every_alert_can_be_rebuilt_exactly_from_the_file():
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)
     )
-    expected = sorted(
-        json.dumps(ids_output(row["engine"], json.loads(row["raw_json"])), sort_keys=True)
-        for row in rows
-    )
+    # Exactly the record each engine wrote: every field, in its own spelling.
+    expected = sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
     assert rebuilt == expected
 
 
@@ -849,7 +803,8 @@ def test_rule_enrichment_is_given_once_per_file():
     assert second["snort"][0]["ids_output"] == {"pkt_len": 120}
     rule_output = document["rules"]["snort:31978"]["ids_output"]
     assert rule_output["class"] == "Attempted Administrator Privilege Gain"
-    assert rule_output["flowstart_time"] == 1792061642
+    # The same on every Snort alert in the file: given once, for the engine.
+    assert document["ids_output"]["snort"]["flowstart_time"] == 1792061642
 
 
 def test_rule_names_keep_a_non_default_gid_and_split_revisions():
@@ -1043,7 +998,7 @@ def test_rule_text_is_given_without_web_link_references_or_metadata():
     assert not {"signature", "rev", "signature_id"} & set(suricata_output)
     for packet, engine, entry, rule in _alerts(document):
         native = (_snort_native() if engine == "snort" else _suricata_native())
-        assert _full_output(document, packet, engine, entry, rule) == ids_output(engine, native)
+        assert _full_output(document, packet, engine, entry, rule) == native
 
 
 # Talos documentation of Snort's FTP bad login rule, as the local copy holds it.
@@ -1185,7 +1140,7 @@ def test_alerts_on_the_same_packet_each_keep_their_full_output():
     assert second["src_addr"] == "192.168.50.141"
 
 
-def test_low_value_defaults_are_left_out():
+def test_low_value_defaults_are_kept_as_the_engine_wrote_them():
     dns_lookup = {
         "alert": {
             "action": "allowed", "category": "Misc activity", "gid": 1, "rev": 2,
@@ -1215,26 +1170,11 @@ def test_low_value_defaults_are_left_out():
     document = _build([_suricata_row(dns_lookup, event_ts_utc=1792061520000)])
 
     (packet, engine, entry, rule), = _alerts(document)
-    assert _full_output(document, packet, engine, entry, rule) == {
-        "alert": {
-            "category": "Misc activity",
-            "metadata": {"confidence": ["High"]},
-            "rev": 2,
-            "severity": 3,
-            "signature": "ET REMOTE_ACCESS Anydesk Domain (boot .net .anydesk .com) in DNS Lookup",
-            "signature_id": 2060512,
-        },
-        "dest_ip": "192.168.50.1",
-        "dest_port": 53,
-        "direction": "to_server",
-        "dns": {
-            "type": "request", "rcode": "NOERROR",
-            "queries": [{"rrname": "boot.net.anydesk.com", "rrtype": "A"}],
-        },
-        "proto": "UDP",
-        "src_ip": "192.168.50.122",
-        "src_port": 50121,
-    }
+    # DNS IDs and flags, rule upkeep metadata, "failed" and the pass action:
+    # all kept, as Suricata wrote them.
+    assert _full_output(document, packet, engine, entry, rule) == dns_lookup
+    assert entry["ids_output"]["dns"]["id"] == 62255
+    assert entry["ids_output"]["app_proto"] == "failed"
 
 
 # Suricata's view of the IGMP query in _igmp_row: it stamps the packet itself,
@@ -1473,15 +1413,20 @@ def test_what_is_the_same_on_every_alert_of_a_connection_is_given_once():
     )
     packets_to_server = later["flow"]["pkts_toserver"] + 1
     later["flow"] = {**later["flow"], "pkts_toserver": packets_to_server}
-    rows = [_suricata_row(), _suricata_row(later, event_ts_utc=1792061642690)]
+    rows = [
+        _suricata_row(), _suricata_row(later, event_ts_utc=1792061642690),
+        # Another connection's alert: what both differ in stays per flow.
+        _suricata_igmp_row(),
+    ]
 
     document = _build(rows)
 
-    first, second = document["packets"]
+    _, first, second = document["packets"]
     assert first["flow"] == second["flow"] == 1
     flow = document["flows"]["1"]["suricata"]
     assert flow["community_id"] == "1:VtLM8w9QQw/rxKkhooBa20VkAO0="
-    assert flow["direction"] == "to_server"
+    # Every Suricata alert in the file goes to the server: said once, for the engine.
+    assert document["ids_output"]["suricata"]["direction"] == "to_server"
     assert flow["flow"]["start"] == "2026-10-15T15:54:02.659143+0500"
     # Suricata's flow addresses and ports are the packet's: not repeated.
     assert not {"src_ip", "dest_ip", "src_port", "dest_port"} & set(flow["flow"])
@@ -1491,10 +1436,7 @@ def test_what_is_the_same_on_every_alert_of_a_connection_is_given_once():
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)
     )
-    assert rebuilt == sorted(
-        json.dumps(ids_output("suricata", json.loads(row["raw_json"])), sort_keys=True)
-        for row in rows
-    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
 
 
 def test_a_rule_name_and_generic_sentences_are_not_repeated_in_the_rule():
@@ -1545,9 +1487,11 @@ def test_suricata_names_for_the_packets_protocol_and_addresses_are_not_repeated(
     assert not {"src_ip", "dest_ip"} & set(entry["ids_output"]["flow"])
     rebuilt = _full_output(document, packet, "suricata", entry, entry["rules"][0])
     assert rebuilt["proto"] == "IPv6-ICMP"
+    # Rebuilt in Suricata's own spelling: IPv6 in full.
     assert (rebuilt["flow"]["src_ip"], rebuilt["flow"]["dest_ip"]) == (
-        "fe80::2d37:6cf4:f5c8:64f7", "ff02::16",
+        "fe80:0000:0000:0000:2d37:6cf4:f5c8:64f7", "ff02:0000:0000:0000:0000:0000:0000:0016",
     )
+    assert rebuilt == native
 
 
 def _leaves(value, path=()):
@@ -1635,15 +1579,14 @@ def test_several_rules_on_one_packet_stay_one_entry_when_one_rule_varies():
     # What 116:444 does not share with the other two stays with the packet;
     # the query's flow gives it once.
     assert document["flows"]["1"]["snort"]["flowstart_time"] == 1792061400
-    assert first["snort"][0]["ids_output"] == {"client_bytes": 210240, "client_pkts": 3504}
+    assert first["snort"][0]["ids_output"] == {
+        "client_bytes": 210240, "client_pkts": 3504, "pkt_num": 100,
+    }
     rebuilt = sorted(
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)
     )
-    assert rebuilt == sorted(
-        json.dumps(ids_output("snort", json.loads(row["raw_json"])), sort_keys=True)
-        for row in rows
-    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
 
 
 def test_what_different_alerts_on_one_packet_share_is_given_once_with_the_packet():
@@ -1656,11 +1599,11 @@ def test_what_different_alerts_on_one_packet_share_is_given_once_with_the_packet
             "target": {"ip": "192.168.50.114", "port": 80},
         },
     )
-    rows = [_suricata_row(first), _suricata_row(second)]
+    rows = [_suricata_row(first), _suricata_row(second), _suricata_igmp_row()]
 
     document = _build(rows)
 
-    packet, = document["packets"]
+    _, packet = document["packets"]
     one, two = packet["suricata"]
     # The second alert names a target; everything else of the packet's output
     # is the same for both, and given once.
@@ -1673,16 +1616,91 @@ def test_what_different_alerts_on_one_packet_share_is_given_once_with_the_packet
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)
     )
-    assert rebuilt == sorted(
-        json.dumps(ids_output("suricata", json.loads(row["raw_json"])), sort_keys=True)
-        for row in rows
-    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
 
 
-def test_snorts_payload_is_written_as_text_as_suricatas_is():
-    from ids.combined_detections import ids_output, printable_payload
+def test_snorts_payload_is_kept_as_it_wrote_it():
+    from ids.combined_detections import ids_output
 
-    assert printable_payload("R0VUIC8gSFRUUC8xLjENCgD/") == "GET / HTTP/1.1\r\n.."
-    assert printable_payload("not base64!") == ""
+    # b64_data is Snort's own field; no text copy of it is added.
     output = ids_output("snort", {"msg": "x", "b64_data": "R0VUIC8="})
-    assert output == {"msg": "x", "payload_printable": "GET /"}
+    assert output == {"msg": "x", "b64_data": "R0VUIC8="}
+
+
+def _ethernet_tcp_payload_packet(payload, padding=b""):
+    """Base64 of an Ethernet/IPv4/TCP packet carrying payload, with Ethernet
+    padding after the IP length when given."""
+    ip = (
+        bytes([0x45, 0]) + (40 + len(payload)).to_bytes(2, "big") + (7).to_bytes(2, "big")
+        + b"\x40\x00\x40\x06\x00\x00"
+        + bytes([192, 168, 50, 141]) + bytes([192, 168, 50, 114])
+    )
+    tcp = (36788).to_bytes(2, "big") + (80).to_bytes(2, "big") + bytes(8) + b"\x50\x18" + bytes(6)
+    return base64.b64encode(bytes(12) + b"\x08\x00" + ip + tcp + payload + padding).decode()
+
+
+def test_suricatas_payload_text_is_derived_from_its_raw_packet():
+    request = _suricata_native(
+        packet=_ethernet_tcp_payload_packet(b"GET / HTTP/1.1\r\n\x00", padding=bytes(4)),
+        packet_info={"linktype": 1},
+        payload_printable="GET / HTTP/1.1\r\n.",
+    )
+    # Suricata wrote no text for this one, though its packet carries a payload.
+    without_text = _suricata_native(
+        packet=_ethernet_tcp_payload_packet(b"\x16\x03"), packet_info={"linktype": 1},
+        timestamp="2026-10-15T15:54:02.690000+0500",
+    )
+    without_text.pop("payload_printable", None)
+    # Reassembled stream data: not the packet's own payload, so kept.
+    stream = _suricata_native(
+        packet=_ethernet_tcp_payload_packet(b"ab"), packet_info={"linktype": 1},
+        payload_printable="whole stream", timestamp="2026-10-15T15:54:02.695000+0500",
+    )
+    rows = [
+        _suricata_row(request),
+        _suricata_row(without_text, event_ts_utc=1792061642690),
+        _suricata_row(stream, event_ts_utc=1792061642695),
+    ]
+
+    document = _build(rows)
+
+    entries = [entry for _, _, entry, _ in _alerts(document)]
+    assert "payload_printable" not in entries[0]["ids_output"]
+    assert entries[1]["ids_output"]["payload_printable"] is None
+    assert entries[2]["ids_output"]["payload_printable"] == "whole stream"
+    rebuilt = sorted(
+        json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
+        for packet, engine, entry, rule in _alerts(document)
+    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
+
+
+def test_an_engine_timestamp_in_another_format_is_kept():
+    # Written in UTC, not the local time the file's times are in.
+    native = _suricata_native(timestamp="2026-10-15T10:54:02.681047+0000")
+
+    document = _build([_suricata_row(native)])
+
+    (packet, engine, entry, rule), = _alerts(document)
+    assert entry["ids_output"]["timestamp"] == "2026-10-15T10:54:02.681047+0000"
+    assert _full_output(document, packet, engine, entry, rule) == native
+
+
+def test_what_every_alert_of_an_engine_shares_is_given_once_for_the_file():
+    rows = [_snort_row(), _suricata_row(), _igmp_row(), _suricata_igmp_row()]
+
+    document = _build(rows)
+
+    # Snort's capture interface, and Suricata's event type and pass action,
+    # once each.
+    assert document["ids_output"]["snort"]["iface"] == "ens38"
+    assert document["ids_output"]["suricata"]["event_type"] == "alert"
+    assert document["ids_output"]["suricata"]["alert"] == {"action": "allowed"}
+    for _, engine, entry, _ in _alerts(document):
+        assert not {"iface", "event_type"} & set(entry.get("ids_output", {}))
+        assert "action" not in entry.get("ids_output", {}).get("alert", {})
+    rebuilt = sorted(
+        json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
+        for packet, engine, entry, rule in _alerts(document)
+    )
+    assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
