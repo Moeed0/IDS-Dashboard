@@ -373,7 +373,7 @@ export async function getJson<T>(path: string, params: Params = {}, signal?: Abo
 }
 
 /** Hands a fetched file to the browser to save. */
-function save(blob: Blob, filename: string): void {
+export function save(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -398,23 +398,13 @@ export async function downloadSelection(params: Params): Promise<string> {
   return filename;
 }
 
-/** Shows the combined JSON of the alerts the filters choose in a browser tab
- * (Firefox lays it out to read), without saving it. The tab is opened at the
- * click, before the file is fetched, so the browser doesn't block it. */
-export async function viewSelection(params: Params): Promise<void> {
-  const tab = window.open("", "_blank");
-  try {
-    const response = await request("/export/selection/file", params);
-    const text = await response.text();
-    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-    if (tab) tab.location.href = url;
-    else window.location.assign(url);
-    // The tab has it by then; the memory goes back after a minute.
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  } catch (reason) {
-    tab?.close();
-    throw reason;
-  }
+/** The combined JSON of the alerts the filters choose, to show on the page
+ * without saving it: its file name and text. */
+export async function fetchSelection(params: Params): Promise<{ filename: string; text: string }> {
+  const response = await request("/export/selection/file", params);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "snort_suricata_combined.json";
+  return { filename, text: await response.text() };
 }
 
 /** Sends the combined JSON of the alerts the filters choose to the LLM PC. */

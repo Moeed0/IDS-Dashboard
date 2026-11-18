@@ -1,5 +1,5 @@
 // The alerts the Alert Explorer's filters choose, as one combined JSON file
-// (see docs/combined-json-format.md): buttons to look at it in a new tab
+// (see docs/combined-json-format.md): buttons to look at it in a pop-up
 // first, download it or send it to the LLM PC, whose hover text says what
 // the file would hold. Only the
 // outcome of a click is written out, a success for a few seconds.
@@ -10,13 +10,14 @@ import {
   count,
   downloadSelection,
   errorText,
+  fetchSelection,
   sendSelection,
   useApi,
-  viewSelection,
   type Options,
   type Params,
   type SelectionInfo,
 } from "./api";
+import { JsonPopup } from "./JsonPopup";
 import { stamp } from "./time";
 
 // As often as the lists' newest alerts.
@@ -43,6 +44,7 @@ export function CombinedExport({
   const { data: info, error } = useApi<SelectionInfo>("/export/selection", params, onUnauthorized, INFO_REFRESH_MS);
   const [busy, setBusy] = useState<"view" | "download" | "send" | null>(null);
   const [result, setResult] = useState<{ text: string; failed: boolean } | null>(null);
+  const [viewed, setViewed] = useState<{ filename: string; text: string; holds: string } | null>(null);
   // Other filters choose other alerts: the last result was about those.
   const chosen = JSON.stringify(params);
   useEffect(() => setResult(null), [chosen]);
@@ -58,7 +60,8 @@ export function CombinedExport({
     setResult(null);
     try {
       if (kind === "view") {
-        await viewSelection(params);
+        const file = await fetchSelection(params);
+        setViewed({ ...file, holds: info ? holding(options, info) : "" });
       } else if (kind === "download") {
         setResult({ text: `Saved ${await downloadSelection(params)}`, failed: false });
       } else {
@@ -89,7 +92,7 @@ export function CombinedExport({
           ? `One file holds at most ${count(info.max_alerts)} alerts: show only the newest few, or narrow the filters`
           : "");
   const downloadHint = why || (info ? `Download ${holding(options, info)}, as combined JSON` : "");
-  const viewHint = why || (info ? `Open ${holding(options, info)} in a new tab, to see the file before downloading it` : "");
+  const viewHint = why || (info ? `Show ${holding(options, info)} in a pop-up, to see the file before downloading it` : "");
   const sendHint = !options.send_to
     ? "Send is off: put the LLM PC's address in IDS_LLM_URL in .env, then restart the dashboard"
     : why || (info ? `Send ${holding(options, info)} to the LLM PC at ${options.send_to}` : "");
@@ -112,6 +115,7 @@ export function CombinedExport({
           {busy === "send" ? "Sending…" : "Send"}
         </button>
       </span>
+      {viewed && <JsonPopup {...viewed} onClose={() => setViewed(null)} />}
       {result && (
         <span className={`outcome ${result.failed ? "error" : "sent"}`} title={result.text}>
           {result.text}
