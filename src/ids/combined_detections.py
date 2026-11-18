@@ -59,7 +59,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "14.0"
+SCHEMA_VERSION = "14.1"
 
 PKT = ZoneInfo("Asia/Karachi")
 

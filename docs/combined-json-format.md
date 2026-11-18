@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.0)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.1)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -238,7 +238,8 @@ only when the file has something to say about it. Each rule has
   Suricata's `alert.severity`, which stay as numbers in `ids_output`. Not
   Suricata's `metadata.signature_severity`, the rule author's own label
   (Critical, Major, Minor, Informational), which Snort's rules don't have;
-- `detection` (14.0): what the rule looks for, in plain words, read from its
+- `detection` (14.0; the numbers it tests, built-in Snort rules and DNS
+  header bytes in words since 14.1): what the rule looks for, in plain words, read from its
   rule text: the ports and addresses it checks, its flow, ICMP type and
   code, the numbers it tests in words (`ip_proto:!17` is "the IP protocol
   is not 17 (UDP)", `flags:S,12` "the TCP flags are exactly SYN (ignoring
@@ -263,7 +264,7 @@ only when the file has something to say about it. Each rule has
   (value of zero)");
 - its `ids_output` part (see The IDS output in parts);
 - its `rule_text`: the rule as written in the local Snort or Suricata rule
-  file, its regular expressions' bytes written by value, `\x81` as `0x81`
+  file, its regular expressions' bytes written by value (14.1), `\x81` as `0x81`
   (with a space between such bytes; a letter, digit or plain sign as
   itself): `pcre:"/^..[\x81\x82\x83\x84\x85\x86\x87]\x85/"` reads
   `pcre:"/^..[0x81 0x82 0x83 0x84 0x85 0x86 0x87]0x85/"`. The message,
