@@ -15,10 +15,13 @@
 #   HOME_NET and EXTERNAL_NET are "any", so every rule applies whichever way
 #   the traffic goes (deploy/suricata/modify.conf fixes the 7 ET rules that
 #   need it).
-# - Two capture threads on the capture card, not one per CPU ("auto": 8).
+# - One capture thread on the capture card, not one per CPU ("auto": 12).
 #   Each thread keeps its own copy of the rules' match state, and this lab's
-#   traffic is a few packets a second: more threads only cost memory, which
-#   on this VM pushes it into swap on a slow disk. Same rules, same alerts.
+#   traffic is about 3 packets a second with none dropped: more threads only
+#   cost memory, which on this VM (9-10 GB) is short. Detection profile
+#   "low" with one shared pattern matcher (sgh-mpm-context single): the same
+#   rules and alerts, loaded in half the time. Same as
+#   deploy/optimize-memory.sh.
 # - Its logs are no longer open to every user: root writes them, and only
 #   this folder's owner (the collector and the dashboard) may read them too.
 #
@@ -115,8 +118,20 @@ for index in range(card + 1, len(lines)):
         sys.exit(f"!! no threads line under {lines[card].strip()} in {path}")
     match = re.match(r"^(\s*)#?\s*threads:\s*\S+", line)
     if match:
-        lines[index] = f"{match.group(1)}threads: 2\n"
+        lines[index] = f"{match.group(1)}threads: 1\n"
         break
+
+# detect: profile low, one shared pattern matcher.
+section = next(i for i, line in enumerate(lines) if re.match(r"^detect:", line))
+wanted = {"profile": "low", "sgh-mpm-context": "single"}
+for index in range(section + 1, len(lines)):
+    if re.match(r"^\S", lines[index]):
+        break
+    match = re.match(r"^(\s+)(profile|sgh-mpm-context):\s*\S+", lines[index])
+    if match and match.group(2) in wanted:
+        lines[index] = f"{match.group(1)}{match.group(2)}: {wanted.pop(match.group(2))}\n"
+if wanted:
+    sys.exit(f"!! detect: has no {', '.join(wanted)} line in {path}")
 
 path.write_text("".join(lines))
 PYTHON
