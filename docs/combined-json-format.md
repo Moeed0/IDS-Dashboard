@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 13.0)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.0)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -231,9 +231,24 @@ alerts give, in one format for both engines (11.0):
 `snort_signature:116:408:1` (a Snort built-in rule),
 `snort_signature:1:31978:5` and `suricata_signature:1:2001119:6`. Two
 revisions of one rule are two rules. A rule appears
-only when the file has something to say about it. Each rule has its
-`ids_output` part (see The IDS output in parts) and its `rule_text`: the
-rule as written in the local Snort or Suricata rule file, without
+only when the file has something to say about it. Each rule has
+
+- `severity` (14.0): the engine's severity in words, `Critical` (1, the most
+  severe), `Medium` (2), `Low` (3) or `Info` (4): Snort's `priority`,
+  Suricata's `alert.severity`, which stay as numbers in `ids_output`. Not
+  Suricata's `metadata.signature_severity`, the rule author's own label
+  (Critical, Major, Minor, Informational), which Snort's rules don't have;
+- `detection` (14.0): what the rule looks for, in plain words, read from its
+  rule text: the ports and addresses it checks, its flow, ICMP type and
+  code, and each content and pcre pattern read out with no backslashes
+  (text as text, other bytes as 0x81, a regular expression step by step:
+  `pcre:"/^..[\x81\x82\x83\x84\x85\x86\x87]\x85/"` becomes "at the start, any
+  2 bytes other than 0x0a, then a byte from 0x81 to 0x87, then the byte
+  0x85"). Up to six patterns are read out; a rule without rule text (a
+  Snort built-in rule) has none;
+- its `ids_output` part (see The IDS output in parts);
+- its `rule_text`: the rule as written in the local Snort or Suricata rule
+  file, without
 
 - its `sid`, `gid` and `rev` options, which the rule's name gives (11.1);
 - its `classtype`, which the alert's `class` (Snort) or `category`

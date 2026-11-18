@@ -3,7 +3,7 @@
 // fired, its text and what is known about it) and the engines' own output
 // for the packet, as the combined JSON gives them (GET /alerts/{id}).
 import { useEffect, type ReactNode } from "react";
-import { SeverityLabel } from "./AlertExplorer";
+import { SeverityCircles } from "./AlertExplorer";
 import { NAMES, ruleName, useApi, type AlertDetails, type AlertRow } from "./api";
 import { stamp } from "./time";
 
@@ -78,7 +78,7 @@ export function AlertDetail({
       <div className="drawer-head">
         {alert ? (
           <h2>
-            <SeverityLabel severity={alert.severity} /> {alert.message}
+            <SeverityCircles severity={alert.severity} /> {alert.message}
           </h2>
         ) : (
           <h2 className="muted">{error ? "" : "Loading…"}</h2>

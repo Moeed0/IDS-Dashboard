@@ -256,7 +256,9 @@ def _places(document, engine, path, value):
 
 
 def _without_output(rule):
-    return {key: value for key, value in rule.items() if key != "ids_output"}
+    """A rule's entry without its IDS output and the words every rule has
+    (its severity, what it looks for), which their own test checks."""
+    return {key: value for key, value in rule.items() if key not in ("ids_output", "severity", "detection")}
 
 
 def _walk(value):
@@ -611,6 +613,7 @@ def test_ids_output_is_each_engines_whole_record():
     # packet's time in the engine's own format.
     assert document["rules"] == {
         "snort_signature:1:31978:5": {
+            "severity": "Critical",
             "ids_output": {
                 "msg": "OS-OTHER Bash CGI environment variable injection attempt",
                 "class": "Attempted Administrator Privilege Gain",
@@ -618,6 +621,7 @@ def test_ids_output_is_each_engines_whole_record():
             },
         },
         "suricata_signature:1:2019232:7": {
+            "severity": "Critical",
             "ids_output": {"alert": {
                 "signature": "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers",
                 "category": "Attempted Administrator Privilege Gain",
@@ -672,7 +676,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "13.0"
+    assert document["schema_version"] == "14.0"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -1786,3 +1790,35 @@ def test_rule_text_leaves_out_the_rule_numbers_its_name_gives():
         'alert tcp any any -> any any (msg:"x"; content:"sid:1;"; gid:1; sid:9; rev:3; '
         'classtype:misc-activity;)'
     ) == 'alert tcp any any -> any any (msg:"x"; content:"sid:1;";)'
+
+
+def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
+    dns = {
+        "alert": {
+            "action": "allowed", "gid": 1, "signature_id": 2001119, "rev": 6, "severity": 3,
+            "signature": "ET DNS Standard query response, Refused", "category": "Not Suspicious Traffic",
+        },
+        "event_type": "alert", "proto": "UDP", "src_ip": "192.168.50.1", "src_port": 53,
+        "dest_ip": "192.168.50.122", "dest_port": 51628,
+        "timestamp": "2026-10-15T15:54:02.680000+0500",
+    }
+
+    def intelligence(engine, gid, sid, message):
+        if sid == 2001119:
+            return {"base_intelligence": {"rule": {"rule_text": (
+                'alert udp $DNS_SERVERS 53 -> any any (msg:"ET DNS Standard query response, Refused"; '
+                'pcre:"/^..[\\x81\\x82\\x83\\x84\\x85\\x86\\x87]\\x85/"; sid:2001119; rev:6;)'
+            )}}}
+        return None
+
+    document = _build([_snort_row(), _suricata_row(dns)], rule_intelligence=intelligence)
+
+    rule = document["rules"]["suricata_signature:1:2001119:6"]
+    assert rule["severity"] == "Low"
+    assert rule["detection"] == (
+        "The rule inspects UDP traffic. It alerts only when the source port is 53; and the "
+        "inspected data matches the regular expression: at the start, any 2 bytes other than "
+        "0x0a, then a byte from 0x81 to 0x87, then the byte 0x85."
+    )
+    assert "\\" not in rule["detection"]
+    assert document["rules"]["snort_signature:1:31978:5"]["severity"] == "Critical"

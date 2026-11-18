@@ -45,6 +45,7 @@ from zoneinfo import ZoneInfo
 from ids.community_id import community_id, protocol_number
 from ids.config import KNOWN_ENGINES
 from ids.extended_alert_intelligence import (
+    _describe_rule_logic,
     ACTION_CONFIRM_EXPECTED,
     ACTION_KEV_PRIORITY,
     ACTION_REVIEW_LOGS,
@@ -58,7 +59,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "13.0"
+SCHEMA_VERSION = "14.0"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -1195,6 +1196,35 @@ def _rule_wide(
     return {key: sorted(paths) for key, paths in taken.items()}
 
 
+# The engines' severity (Snort's priority, Suricata's severity), 1 the most
+# severe, in words.
+SEVERITY_WORDS = {1: "Critical", 2: "Medium", 3: "Low", 4: "Info"}
+_GENERIC_DETECTION = "The traffic matched the conditions defined by the IDS rule."
+
+
+def severity_word(engine: str, native: Mapping[str, Any]) -> str | None:
+    """The alert's severity in words: Critical (1), Medium (2), Low (3) or
+    Info (4 and above)."""
+    value = native.get("priority") if engine == "snort" else _dict(native.get("alert")).get("severity")
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return SEVERITY_WORDS[min(4, max(1, number))]
+
+
+def detection_words(rule_text: Any) -> str | None:
+    """What the rule looks for, in plain words: its ports, addresses, flow
+    and each content or pcre pattern read out (text as text, other bytes as
+    0x81, regular expressions step by step), with no backslashes, so that
+    an LLM or a person reads it without decoding the rule's escapes."""
+    if not isinstance(rule_text, str) or not rule_text.strip():
+        return None
+    parts = rule_text.split()
+    sentence = _describe_rule_logic({"rule_text": rule_text, "protocol": parts[1] if len(parts) > 1 else ""})
+    return None if sentence == _GENERIC_DETECTION else sentence
+
+
 def _int(value: Any) -> Any:
     return int(value) if isinstance(value, str) and value.isdigit() else value
 
@@ -1686,6 +1716,9 @@ def build_combined_detections(
     outputs = {key: prune_empty(output) for key, output in outputs.items()}
     rule_entries = {
         key: prune_empty({
+            "severity": severity_word(by_rule[key][0].engine, by_rule[key][0].native),
+            # The enrichment's why_triggered says it already.
+            "detection": None if enrichment else detection_words(rule_facts[key].get("rule_text")),
             "ids_output": common[key],
             **(
                 _rule_section(rule_facts[key])
