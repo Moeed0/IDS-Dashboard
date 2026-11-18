@@ -131,11 +131,42 @@ def test_rule_logic_words_patterns_without_backslashes():
     )
     text = _describe_rule_logic({"protocol": "ip", "rule_text": rule_text})
     assert text == (
-        "The rule inspects IP traffic. It alerts only when the inspected data contains "
-        "the byte 0x11; the inspected data contains `Host: x;y`; and the inspected data "
-        "matches the regular expression in the rule text."
+        "The rule inspects IP traffic. It alerts only when the IP protocol is 2 (IGMP); "
+        "the inspected data contains the byte 0x11; the inspected data contains "
+        "`Host: x;y`; and the inspected data matches the regular expression in the rule text."
     )
     assert "\\" not in text
+
+
+def test_rule_logic_words_the_numbers_a_rule_tests() -> None:
+    # 2101620 "GPL INFO TRAFFIC Non-Standard IP protocol", as Suricata loads it.
+    rule_text = (
+        'alert ip $EXTERNAL_NET any -> $HOME_NET any (msg:"GPL INFO TRAFFIC '
+        'Non-Standard IP protocol"; ip_proto:!1; ip_proto:!2; ip_proto:!47; '
+        'ip_proto:!50; ip_proto:!51; ip_proto:!6; ip_proto:!89; ip_proto:!17; '
+        'sid:2101620; rev:7;)'
+    )
+    assert _describe_rule_logic({"protocol": "ip", "rule_text": rule_text}) == (
+        "The rule inspects IP traffic. It alerts only when the IP protocol is not "
+        "1 (ICMP), 2 (IGMP), 47 (GRE), 50 (ESP), 51 (AH), 6 (TCP), 89 (OSPF) or 17 (UDP)."
+    )
+    rule_text = (
+        'alert tcp any any -> any any (msg:"x"; flags:S,12; dsize:>100; window:!1024; '
+        'ttl:<5; fragbits:M+; ipopts:lsrr; stream_size:server,>,1000; sid:1;)'
+    )
+    assert _describe_rule_logic({"protocol": "tcp", "rule_text": rule_text}) == (
+        "The rule inspects TCP traffic. It alerts only when the TCP flags are exactly SYN "
+        "(ignoring CWR and ECE); the payload size is more than 100 bytes; the TCP window "
+        "size is not 1024; the IP time-to-live (TTL) is less than 5; the IP fragment bits "
+        "include More Fragments; the packet has the IP option Loose Source Routing; and "
+        "the server has sent more than 1000 bytes so far."
+    )
+    rule_text = 'alert tcp any any -> any any (msg:"x"; flags:FPU*; dsize:10<>20; sameip; sid:1;)'
+    assert _describe_rule_logic({"protocol": "tcp", "rule_text": rule_text}) == (
+        "The rule inspects TCP traffic. It alerts only when the TCP flags include FIN, PSH "
+        "or URG; the payload size is between 10 and 20 bytes; and the source and "
+        "destination addresses are the same."
+    )
 
 
 def test_rule_logic_uses_rule_text_conditions():
@@ -321,3 +352,16 @@ def test_builtin_snort_rules_are_described_without_rule_text():
     # Text rules (GID 1) and Suricata rules are described from their rule text.
     assert _describe_builtin_rule({"engine": "snort", "gid": 1, "sid": 401}) is None
     assert _describe_builtin_rule({"engine": "suricata", "gid": 129, "sid": 1}) is None
+
+
+def test_rule_logic_words_excluded_ports_without_exclamation_marks() -> None:
+    # 2009208's header, as Suricata loads it.
+    rule_text = (
+        'alert udp $HOME_NET [!1720,!1722,!2427,!5060,1024:] -> $EXTERNAL_NET '
+        '[!1720,!1722,!2427,!5060,1024:] (msg:"x"; dsize:>19; sid:2009208; rev:4;)'
+    )
+    assert _describe_rule_logic({"protocol": "udp", "rule_text": rule_text}) == (
+        "The rule inspects UDP traffic. It alerts only when the source port is 1024 or "
+        "higher, but not 1720, 1722, 2427 or 5060; the destination port is 1024 or higher, "
+        "but not 1720, 1722, 2427 or 5060; and the payload size is more than 19 bytes."
+    )

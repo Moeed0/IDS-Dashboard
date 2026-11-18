@@ -240,12 +240,21 @@ only when the file has something to say about it. Each rule has
   (Critical, Major, Minor, Informational), which Snort's rules don't have;
 - `detection` (14.0): what the rule looks for, in plain words, read from its
   rule text: the ports and addresses it checks, its flow, ICMP type and
-  code, and each content and pcre pattern read out with no backslashes
+  code, the numbers it tests in words (`ip_proto:!17` is "the IP protocol
+  is not 17 (UDP)", `flags:S,12` "the TCP flags are exactly SYN (ignoring
+  CWR and ECE)", `dsize:>100` "the payload size is more than 100 bytes";
+  also ttl, window, ack, seq, id, tos, fragbits, fragoffset, ipopts,
+  urilen, stream_size, sameip, icmp_id and icmp_seq), and each content and
+  pcre pattern read out with no backslashes
   (text as text, other bytes as 0x81, a regular expression step by step:
   `pcre:"/^..[\x81\x82\x83\x84\x85\x86\x87]\x85/"` becomes "at the start, any
   2 bytes other than 0x0a, then a byte from 0x81 to 0x87, then the byte
-  0x85"). Up to six patterns are read out; a rule without rule text (a
-  Snort built-in rule) has none;
+  0x85"). Up to six patterns are read out. A Snort built-in rule (GID above
+  1) has no rule text: its `detection` is Snort's own description of the
+  rule, from intel.db's `snort_builtin_docs` ("A built-in Snort rule
+  (116:408), with no rule text. Snort's own description of what it
+  detects: The IPv4 packet's source address is from the 'current net'
+  (value of zero)");
 - its `ids_output` part (see The IDS output in parts);
 - its `rule_text`: the rule as written in the local Snort or Suricata rule
   file, without

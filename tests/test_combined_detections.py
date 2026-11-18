@@ -1822,3 +1822,17 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
     )
     assert "\\" not in rule["detection"]
     assert document["rules"]["snort_signature:1:31978:5"]["severity"] == "Critical"
+
+
+def test_a_snort_built_in_rule_is_described_by_snorts_own_words():
+    native = _snort_native(msg="(ipv4) IPv4 option set", gid=116, sid=444, rev=1, rule="116:444:1")
+
+    def intelligence(engine, gid, sid, message):
+        return {"snort_builtin_doc": "(ipv4) IPv4 option set"} if (gid, sid) == (116, 444) else None
+
+    document = _build([_snort_row(native)], rule_intelligence=intelligence)
+
+    assert document["rules"]["snort_signature:116:444:1"]["detection"] == (
+        "A built-in Snort rule (116:444), with no rule text. Snort's own description of "
+        "what it detects: (ipv4) IPv4 option set"
+    )

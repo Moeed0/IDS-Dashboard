@@ -905,6 +905,8 @@ def _rule_facts(
         "attack_techniques": list(identifiers.get("mitre_attack") or []),
         "why_triggered": explanation.get("why_triggered"),
         "rule_text": _rule_text(_dict(base.get("rule")).get("rule_text")),
+        # A Snort built-in rule has no rule text; Snort describes it.
+        "builtin_description": _one_line(intelligence.get("snort_builtin_doc")) or None,
         "documentation": _documentation(documentation),
         # Talos generates the documentation of many CVE rules from NVD data.
         "documentation_from_nvd": "national vulnerability database"
@@ -1223,6 +1225,17 @@ def detection_words(rule_text: Any) -> str | None:
     parts = rule_text.split()
     sentence = _describe_rule_logic({"rule_text": rule_text, "protocol": parts[1] if len(parts) > 1 else ""})
     return None if sentence == _GENERIC_DETECTION else sentence
+
+
+def _builtin_detection(rule_key: str, description: Any) -> str | None:
+    """A Snort built-in rule's detection: Snort's own description of it."""
+    if not description:
+        return None
+    ids = ":".join(rule_key.split(":")[1:3])
+    return (
+        f"A built-in Snort rule ({ids}), with no rule text. Snort's own "
+        f"description of what it detects: {description}"
+    )
 
 
 def _int(value: Any) -> Any:
@@ -1718,7 +1731,10 @@ def build_combined_detections(
         key: prune_empty({
             "severity": severity_word(by_rule[key][0].engine, by_rule[key][0].native),
             # The enrichment's why_triggered says it already.
-            "detection": None if enrichment else detection_words(rule_facts[key].get("rule_text")),
+            "detection": None if enrichment else (
+                detection_words(rule_facts[key].get("rule_text"))
+                or _builtin_detection(key, rule_facts[key].get("builtin_description"))
+            ),
             "ids_output": common[key],
             **(
                 _rule_section(rule_facts[key])

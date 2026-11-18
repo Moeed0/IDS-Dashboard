@@ -896,7 +896,7 @@ def offline_rule_intelligence(engine: str, gid: Any, sid: Any, message: str) -> 
     """Offline intelligence for one rule from the local data, kept for the
     next export; {} when there is none."""
     # Loaded on the first export: the other screens do not need it.
-    from ids.offline_intelligence import get_offline_live_intelligence
+    from ids.offline_intelligence import get_offline_live_intelligence, get_snort_builtin_doc
 
     try:
         intelligence, _ = get_offline_live_intelligence(
@@ -904,7 +904,16 @@ def offline_rule_intelligence(engine: str, gid: Any, sid: Any, message: str) -> 
         )
     except Exception:
         return {}
-    return intelligence if isinstance(intelligence, dict) else {}
+    if not isinstance(intelligence, dict):
+        return {}
+    if engine == "snort":
+        try:
+            builtin = get_snort_builtin_doc(gid, sid)
+        except Exception:
+            builtin = None
+        if builtin:
+            intelligence["snort_builtin_doc"] = builtin
+    return intelligence
 
 
 def combined_export(

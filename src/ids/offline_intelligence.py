@@ -276,6 +276,31 @@ def get_attack_technique(
     }
 
 
+def get_snort_builtin_doc(
+    gid: Any,
+    sid: Any,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> str | None:
+    """Snort's own description of one of its built-in rules (GID other than
+    1, which have no rule text), from snort_builtin_docs; None if absent."""
+    try:
+        gid, sid = int(gid), int(sid)
+    except (TypeError, ValueError):
+        return None
+    if gid <= 1:
+        return None
+    with connect_offline_db(db_path) as connection:
+        if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'snort_builtin_docs'"
+        ).fetchone():
+            return None
+        row = connection.execute(
+            "SELECT description FROM snort_builtin_docs WHERE gid = ? AND sid = ?",
+            (gid, sid),
+        ).fetchone()
+    return str(row["description"]).strip() or None if row else None
+
+
 def get_offline_live_intelligence(
     alert: dict[str, Any],
     *,

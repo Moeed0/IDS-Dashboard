@@ -1433,6 +1433,40 @@ _ENGINE_EVENT_SOURCES = {
     "decode-event": "packet decoder",
     "app-layer-event": "application-layer parser",
 }
+# IP protocol numbers (IANA) the rules test with ip_proto.
+_IP_PROTOCOL_NAMES = {
+    0: "IPv6 Hop-by-Hop", 1: "ICMP", 2: "IGMP", 4: "IP-in-IP", 6: "TCP",
+    17: "UDP", 41: "IPv6", 43: "IPv6 Routing", 44: "IPv6 Fragment",
+    47: "GRE", 50: "ESP", 51: "AH", 58: "ICMPv6", 59: "IPv6 No Next Header",
+    60: "IPv6 Destination Options", 88: "EIGRP", 89: "OSPF", 103: "PIM",
+    112: "VRRP", 115: "L2TP", 132: "SCTP",
+}
+_TCP_FLAG_NAMES = {
+    "F": "FIN", "S": "SYN", "R": "RST", "P": "PSH", "A": "ACK", "U": "URG",
+    "C": "CWR", "E": "ECE", "1": "CWR", "2": "ECE", "0": "no flag",
+}
+_FRAG_BIT_NAMES = {"M": "More Fragments", "D": "Don't Fragment", "R": "the reserved bit"}
+_IP_OPTION_NAMES = {
+    "rr": "Record Route", "eol": "End of List", "nop": "No Operation",
+    "ts": "Timestamp", "sec": "Security", "esec": "Extended Security",
+    "lsrr": "Loose Source Routing", "lsrre": "Loose Source Routing",
+    "ssrr": "Strict Source Routing", "satid": "Stream Identifier",
+    "any": "any option",
+}
+# Options that compare one number, and what the number is.
+_NUMBER_CHECKS = {
+    "dsize": ("the payload size is", " bytes"),
+    "ttl": ("the IP time-to-live (TTL) is", ""),
+    "window": ("the TCP window size is", ""),
+    "ack": ("the TCP acknowledgment number is", ""),
+    "seq": ("the TCP sequence number is", ""),
+    "id": ("the IP identification field is", ""),
+    "icmp_id": ("the ICMP identifier is", ""),
+    "icmp_seq": ("the ICMP sequence number is", ""),
+    "urilen": ("the URI is", " bytes long"),
+    "fragoffset": ("the IP fragment offset is", ""),
+    "tos": ("the IP type of service is", ""),
+}
 _HEX_BLOCK_RE = re.compile(r"\|([0-9A-Fa-f\s]+)\|")
 # "alert ip SRC SPORT -> DST DPORT (": Snort 3 service rules have no header.
 _RULE_HEADER_RE = re.compile(
@@ -1450,6 +1484,98 @@ def _port_range(value: str) -> str:
     return f"{low} or higher" if low else f"{high} or lower"
 
 
+def _compared(value: str, unit: str = "") -> str:
+    """A rule's number test in words: "<5" is less than 5, "5<>10" between
+    5 and 10, "!0" not 0."""
+    value = value.strip().split(",")[0].strip()
+    for separator in ("<>", "<=>"):
+        low, found, high = value.partition(separator)
+        if found and low.strip() and high.strip():
+            return f"between {low.strip()} and {high.strip()}{unit}"
+    for sign, words in (("<=", "at most"), (">=", "at least"), ("!=", "not"),
+                        ("<", "less than"), (">", "more than"), ("!", "not"), ("=", "")):
+        if value.startswith(sign):
+            number = value[len(sign):].strip()
+            return f"{words} {number}{unit}".strip()
+    return f"{value}{unit}"
+
+
+def _named_list(letters: str, names: Mapping[str, str], last: str = "and") -> str:
+    return _named_list_words(
+        [names.get(letter, letter) for letter in letters if letter.strip()], last
+    )
+
+
+def _bits_check(value: str, names: Mapping[str, str], what: str) -> str:
+    """flags / fragbits in words: "S,12" is exactly SYN, ignoring CWR and ECE;
+    "+" adds "and maybe others", "*" any of them, "!" none of them."""
+    bits, _, ignored = value.partition(",")
+    bits = bits.strip()
+    modifier = ""
+    for sign in "+*!":
+        if sign in bits:
+            modifier = sign
+            bits = bits.replace(sign, "")
+    listed = _named_list(bits, names)
+    if modifier == "+":
+        text = f"the {what} include {listed}"
+    elif modifier == "*":
+        text = f"the {what} include {_named_list(bits, names, 'or')}"
+    elif modifier == "!":
+        text = f"the {what} are not {listed}"
+    elif bits == "0":
+        text = f"no {what} are set"
+    else:
+        text = f"the {what} are exactly {listed}"
+    if ignored.strip():
+        text += f" (ignoring {_named_list(ignored.strip(), names)})"
+    return text
+
+
+def _ip_protocols(values: list[str]) -> str:
+    """ip_proto tests in words, each number with its protocol's name."""
+    def named(value: str) -> str:
+        number = value.lstrip("!<>=").strip()
+        name = _IP_PROTOCOL_NAMES.get(int(number)) if number.isdigit() else None
+        return f"{number} ({name})" if name else number
+
+    negated = [value for value in values if value.startswith("!")]
+    others = [value for value in values if not value.startswith("!")]
+    parts = []
+    if negated:
+        parts.append("the IP protocol is not " + _named_list_words([named(v) for v in negated], "or"))
+    for value in others:
+        number = named(value)
+        if value.startswith("<"):
+            parts.append(f"the IP protocol number is less than {number}")
+        elif value.startswith(">"):
+            parts.append(f"the IP protocol number is more than {number}")
+        else:
+            parts.append(f"the IP protocol is {number}")
+    return "; ".join(parts)
+
+
+def _named_list_words(items: list[str], last: str = "and") -> str:
+    if len(items) < 2:
+        return "".join(items)
+    return ", ".join(items[:-1]) + f" {last} " + items[-1]
+
+
+def _stream_size(value: str) -> str:
+    """stream_size:server,>,100: bytes one side has sent so far."""
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 3:
+        return f"the stream size test {value} holds"
+    side, operator, number = parts
+    who = {
+        "server": "the server has sent",
+        "client": "the client has sent",
+        "both": "each side has sent",
+        "either": "either side has sent",
+    }.get(side, f"{side} has sent")
+    return f"{who} {_compared(operator + number)} bytes so far"
+
+
 def _header_literal_checks(rule_text: str) -> list[str]:
     """Addresses and ports the rule header names literally (not "any" or a
     $VARIABLE, whose value depends on the sensor's configuration)."""
@@ -1464,13 +1590,22 @@ def _header_literal_checks(rule_text: str) -> list[str]:
         if value == "any" or "$" in value:
             continue
         negated = value.startswith("!")
-        items = value.lstrip("!").strip("[]").split(",")
+        items = [item for item in value.lstrip("!").strip("[]").split(",") if item]
+        # "[1024:,!5060]": 1024 or higher, but not 5060.
+        excluded = [item.lstrip("!") for item in items if item.startswith("!")]
+        items = [item for item in items if not item.startswith("!")]
         if "port" in label:
             items = [_port_range(item) for item in items]
-        listed = ", ".join(items)
-        several = len(items) > 1 or "/" in value
-        verb = ("is not" if negated else "is") + (" in" if several else "")
-        checks.append(f"the {label} {verb} {listed}")
+            excluded = [_port_range(item) for item in excluded]
+        text = ""
+        if items:
+            several = len(items) > 1 or any("/" in item for item in items)
+            verb = ("is not" if negated else "is") + (" in" if several else "")
+            text = f"the {label} {verb} {', '.join(items)}"
+        if excluded:
+            words = _named_list_words(excluded, "or")
+            text = f"{text}, but not {words}" if text else f"the {label} is not {words}"
+        checks.append(text)
     return checks
 
 
@@ -1550,13 +1685,33 @@ def _rule_header_checks(rule_text: Any) -> list[str]:
 
     options: dict[str, str] = {}
     events: list[str] = []
+    numbers: list[str] = []
+    protocols: list[str] = []
     for match in _RULE_OPTION_RE.finditer(text[start + 1:end]):
         name = match.group(1).lower()
         value = (match.group(2) or "").strip()
+        if name == "sameip":
+            numbers.append("the source and destination addresses are the same")
         if not value:
             continue
         if name in ("itype", "icode"):
             options[name] = value
+        elif name == "ip_proto":
+            protocols.append(value)
+        elif name in _NUMBER_CHECKS:
+            label, unit = _NUMBER_CHECKS[name]
+            numbers.append(f"{label} {_compared(value, unit)}")
+        elif name == "flags":
+            numbers.append(_bits_check(value, _TCP_FLAG_NAMES, "TCP flags"))
+        elif name == "fragbits":
+            numbers.append(_bits_check(value, _FRAG_BIT_NAMES, "IP fragment bits"))
+        elif name == "ipopts":
+            numbers.append(
+                "the packet has an IP option" if value.lower() == "any"
+                else f"the packet has the IP option {_IP_OPTION_NAMES.get(value.lower(), value)}"
+            )
+        elif name == "stream_size":
+            numbers.append(_stream_size(value))
         elif name in _ENGINE_EVENT_SOURCES:
             events.append(
                 f"Suricata's {_ENGINE_EVENT_SOURCES[name]} reports the "
@@ -1565,6 +1720,8 @@ def _rule_header_checks(rule_text: Any) -> list[str]:
 
     # Rules may list icode before itype; the code's name depends on the type.
     checks = _header_literal_checks(text)
+    if protocols:
+        checks.append(_ip_protocols(protocols))
     icmp_type = options.get("itype")
     type_number = int(icmp_type) if icmp_type and icmp_type.isdigit() else None
     if icmp_type:
@@ -1579,7 +1736,7 @@ def _rule_header_checks(rule_text: Any) -> list[str]:
         checks.append(
             f"the ICMP code is {icmp_code}" + (f" ({label})" if label else "")
         )
-    return checks + events
+    return checks + numbers + events
 
 
 _BUILTIN_COMPONENT_RE = re.compile(r"^\(([\w.-]+)\)")
