@@ -59,7 +59,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "14.2"
+SCHEMA_VERSION = "14.3"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -1244,8 +1244,8 @@ def _rule_wide(
 
 
 # The engines' severity (Snort's priority, Suricata's severity), 1 the most
-# severe, in words.
-SEVERITY_WORDS = {1: "Critical", 2: "Medium", 3: "Low", 4: "Info"}
+# severe, in words with the engine's number beside it.
+SEVERITY_WORDS = {1: "Critical (1)", 2: "Medium (2)", 3: "Low (3)", 4: "Info (4)"}
 _GENERIC_DETECTION = "The traffic matched the conditions defined by the IDS rule."
 
 
@@ -1256,7 +1256,8 @@ _SEVERITY_NUMBERS = {word: number for number, word in SEVERITY_WORDS.items()}
 
 
 def _severity_in_words(engine: str, output: dict[str, Any]) -> dict[str, Any]:
-    """The output with its severity number 1 to 4 as a word (3 is "Low");
+    """The output with its severity number 1 to 4 as a word and the number
+    (3 is "Low (3)");
     another value stays as the engine wrote it."""
     *parents, field = _SEVERITY_PATHS[engine]
     holder: Any = output

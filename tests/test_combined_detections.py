@@ -616,14 +616,14 @@ def test_ids_output_is_each_engines_whole_record():
             "ids_output": {
                 "msg": "OS-OTHER Bash CGI environment variable injection attempt",
                 "class": "Attempted Administrator Privilege Gain",
-                "priority": "Critical",
+                "priority": "Critical (1)",
             },
         },
         "suricata_signature:1:2019232:7": {
             "ids_output": {"alert": {
                 "signature": "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers",
                 "category": "Attempted Administrator Privilege Gain",
-                "severity": "Critical",
+                "severity": "Critical (1)",
                 "metadata": {
                     "confidence": ["Medium"], "created_at": ["2014_09_25"],
                     "cve": ["CVE_2014_6271"],
@@ -674,7 +674,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "14.2"
+    assert document["schema_version"] == "14.3"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -1812,8 +1812,8 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
     document = _build([_snort_row(), _suricata_row(dns)], rule_intelligence=intelligence)
 
     rule = document["rules"]["suricata_signature:1:2001119:6"]
-    # The engines' severity numbers in words: 1 Critical, 2 Medium, 3 Low, 4 Info.
-    assert rule["ids_output"]["alert"]["severity"] == "Low"
+    # The engines' severity in words, the number beside it: Critical (1) to Info (4).
+    assert rule["ids_output"]["alert"]["severity"] == "Low (3)"
     assert "severity" not in rule
     assert rule["detection"] == (
         "The rule inspects UDP traffic. It alerts only when the source port is 53; and the "
@@ -1831,7 +1831,7 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
         'alert udp $DNS_SERVERS 53 -> any any (msg:"ET DNS Standard query response, Refused"; '
         'pcre:"/^..[0x81 0x82 0x83 0x84 0x85 0x86 0x87]0x85/";)'
     )
-    assert document["rules"]["snort_signature:1:31978:5"]["ids_output"]["priority"] == "Critical"
+    assert document["rules"]["snort_signature:1:31978:5"]["ids_output"]["priority"] == "Critical (1)"
     # The rebuild gives the engines' numbers back.
     for packet, engine, entry, name in _alerts(document):
         rebuilt = _full_output(document, packet, engine, entry, name)

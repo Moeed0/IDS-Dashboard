@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.2)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.3)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -233,10 +233,11 @@ alerts give, in one format for both engines (11.0):
 revisions of one rule are two rules. A rule appears
 only when the file has something to say about it. Each rule has
 
-- in its `ids_output`, the engine's severity in words (14.2): Snort's
-  `priority` and Suricata's `alert.severity` are written `Critical` (1, the
-  most severe), `Medium` (2), `Low` (3) or `Info` (4), any other number as
-  the engine wrote it; `rebuild_ids_output` gives the number back. Not
+- in its `ids_output`, the engine's severity in words (14.2) with its
+  number beside it (14.3): Snort's `priority` and Suricata's
+  `alert.severity` are written `"Critical (1)"` (the most severe),
+  `"Medium (2)"`, `"Low (3)"` or `"Info (4)"`, any other number as the
+  engine wrote it; `rebuild_ids_output` gives the number back. Not
   Suricata's `metadata.signature_severity`, the rule author's own label
   (Critical, Major, Minor, Informational), which Snort's rules don't have.
   (14.0 and 14.1 gave the word in a separate `severity` field and kept the
