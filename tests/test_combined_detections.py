@@ -1819,6 +1819,11 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
         "The rule inspects UDP traffic. It alerts only when the source port is 53; and the "
         "inspected data matches the regular expression: at the start, any 2 bytes other than "
         "0x0a, then a byte from 0x81 to 0x87, then the byte 0x85."
+        " Read as the DNS header (RFC 1035): bytes 1-2, the transaction ID, can be any value without a 0x0a byte; "
+        "byte 3 (0x81 to 0x87) means a response (QR=1) to a standard query (opcode 0, QUERY), "
+        "with at least one of AA (authoritative answer), TC (truncated) or RD (recursion desired) "
+        "set; byte 4 (0x85) means RA (recursion available) set, AD (authenticated data) not set, "
+        "CD (checking disabled) not set, response code 5, Refused (the server refused to answer)."
     )
     assert "\\" not in rule["detection"]
     # The rule text writes the pattern's bytes as 0x81 too; its message stays.

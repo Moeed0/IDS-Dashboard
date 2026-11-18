@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from ids.alert_intelligence import (
     build_alert_intelligence_context,
 )
+from ids.dns_header_words import dns_header_words
 from ids.pattern_words import read_content, read_pcre
 
 
@@ -1845,6 +1846,11 @@ def _describe_rule_logic(
     elif patterns:
         listed = "; ".join(read_content(pattern) or f"`{pattern}`" for pattern in patterns[:5])
         sentence += f" It looks for: {listed}."
+
+    # What a DNS rule's header bytes (0x81, 0x85) mean.
+    dns = dns_header_words(str(rule.get("rule_text") or ""))
+    if dns:
+        sentence += f" {dns}"
 
     return sentence
 

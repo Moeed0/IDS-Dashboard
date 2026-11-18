@@ -249,7 +249,13 @@ only when the file has something to say about it. Each rule has
   (text as text, other bytes as 0x81, a regular expression step by step:
   `pcre:"/^..[\x81\x82\x83\x84\x85\x86\x87]\x85/"` becomes "at the start, any
   2 bytes other than 0x0a, then a byte from 0x81 to 0x87, then the byte
-  0x85"). Up to six patterns are read out. A Snort built-in rule (GID above
+  0x85"). Up to six patterns are read out. A UDP rule on port 53 whose
+  patterns fix bytes at the start of the DNS message also gets what those
+  bytes mean in the DNS header (RFC 1035, `ids/dns_header_words.py`):
+  2001119's adds "byte 3 (0x81 to 0x87) means a response (QR=1) to a
+  standard query (opcode 0, QUERY), with at least one of AA, TC or RD set;
+  byte 4 (0x85) means RA set, …, response code 5, Refused" (164 of the
+  loaded rules). A Snort built-in rule (GID above
   1) has no rule text: its `detection` is Snort's own description of the
   rule, from intel.db's `snort_builtin_docs` ("A built-in Snort rule
   (116:408), with no rule text. Snort's own description of what it
