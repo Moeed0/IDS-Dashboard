@@ -215,3 +215,23 @@ def test_a_page_refused_for_too_many_requests_is_fetched_again_after_waiting(mon
         "gid": 1, "sid": 217, "doc_found": 1,
         "doc_url": "https://www.snort.org/rule_docs/1-217", "msg": "A rule",
     }
+
+
+def test_snort_orgs_address_is_looked_up_once_not_for_each_page(monkeypatch):
+    import scripts.download_talos_docs as talos
+
+    looked_up = []
+
+    def lookup(host, *args, **kwargs):
+        looked_up.append(host)
+        return [("address of", host)]
+
+    monkeypatch.setattr(talos, "_lookup", lookup)
+    monkeypatch.setattr(talos, "_addresses", {})
+
+    for _ in range(3):
+        assert talos._remembered_lookup("www.snort.org", 443) == [("address of", "www.snort.org")]
+    talos._remembered_lookup("example.org", 443)
+    talos._remembered_lookup("example.org", 443)
+
+    assert looked_up == ["www.snort.org", "example.org", "example.org"]

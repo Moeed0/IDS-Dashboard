@@ -270,8 +270,10 @@ from files on the IDS machine:
   `scripts/download_talos_docs.py` saves the snort.org page of every rule in
   the registered snapshot (about 52,700 text and SO rules; the 4,017 the
   local copy has are skipped) once, one page at a time at the pace
-  snort.org allows (about ten a minute, so three to four days; it slows down
-  when snort.org answers HTTP 429).
+  snort.org allows (a page every 3 seconds or so, so a day or two; it slows
+  down when snort.org answers HTTP 429, and looks www.snort.org up once every
+  half hour, since each lookup reaches the lab network and raises Suricata
+  alerts).
   Run it once, again if it stops, and after a rule update to fetch only the
   new rules:
 

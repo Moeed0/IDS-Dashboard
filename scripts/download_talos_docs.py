@@ -28,14 +28,19 @@ already has, about 4,000, are not fetched.
 
 snort.org limits how fast pages may be fetched: three at a time were
 refused (HTTP 429) after about 50, and one at a time it allowed about ten a
-minute. So it fetches one page at a time, and when snort.org answers 429 it
-waits (as long as its Retry-After says, else a minute), fetches the page
-again and leaves more time between pages; after 100 pages without a 429 it
-goes a little faster again. At about ten pages a minute the 48,600 pages
-take three to four days; run it where it can keep going, and again if it
-stops (only one at a time):
+minute. So it fetches one page at a time, a page every 3 seconds at most
+(the pace it settled at), and when snort.org answers 429 it waits (as long
+as its Retry-After says, else a minute), fetches the page again and leaves
+more time between pages; after 100 pages without a 429 it goes a little
+faster again, down to that 3 seconds. The 48,600 pages take a day or two;
+run it where it can keep going, and again if it stops (only one at a time):
 
     nohup .venv/bin/python scripts/download_talos_docs.py > data/intel/sources/talos/download.log 2>&1 &
+
+www.snort.org's address is looked up once every half hour, not for each
+page: this machine's lookups reach the lab network (through VMware's NAT and
+the host), where Suricata alerts on each one, and a lookup per page made
+most of its alerts.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ import fcntl
 import html
 import json
 import re
+import socket
 import sys
 import threading
 import time
@@ -58,6 +64,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "intel" / "sources" / "talos" / "rule_docs.jsonl"
 DEFAULT_RULES = Path("/usr/local/etc/snort/registered")
 PAGE_URL = "https://www.snort.org/rule_docs/{gid}-{sid}"
+PAGE_HOST = "www.snort.org"
+# How long a lookup of PAGE_HOST's address is used.
+ADDRESS_SECONDS = 1800
 USER_AGENT = "IDS-Dashboard rule documentation download"
 
 # What a page writes when it has nothing to say.
@@ -187,6 +196,24 @@ class _Pace:
 
 _pace = _Pace()
 
+_lookup = socket.getaddrinfo
+# PAGE_HOST's addresses: when they were looked up and what they were.
+_addresses: dict[tuple[Any, ...], tuple[float, Any]] = {}
+
+
+def _remembered_lookup(host: Any, *args: Any, **kwargs: Any) -> Any:
+    """socket.getaddrinfo, looking PAGE_HOST up once every ADDRESS_SECONDS.
+    The connection still names the host (TLS checks its certificate)."""
+    if host != PAGE_HOST:
+        return _lookup(host, *args, **kwargs)
+    key = (host, *args, *sorted(kwargs.items()))
+    looked_up = _addresses.get(key)
+    if looked_up is not None and time.monotonic() - looked_up[0] < ADDRESS_SECONDS:
+        return looked_up[1]
+    found = _lookup(host, *args, **kwargs)
+    _addresses[key] = (time.monotonic(), found)
+    return found
+
 
 def fetch(gid: int, sid: int, attempts: int = 3, slowdowns: int = 20) -> dict[str, Any]:
     url = PAGE_URL.format(gid=gid, sid=sid)
@@ -214,6 +241,7 @@ def fetch(gid: int, sid: int, attempts: int = 3, slowdowns: int = 20) -> dict[st
             if attempt >= attempts:
                 raise
         except (urllib.error.URLError, TimeoutError, ConnectionError):
+            _addresses.clear()  # the address may have changed: look it up again
             attempt += 1
             if attempt >= attempts:
                 raise
@@ -284,7 +312,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--rules", type=Path, default=DEFAULT_RULES, help=f"the registered snapshot (default: {DEFAULT_RULES})")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="where the documents go")
     parser.add_argument("--workers", type=int, default=1, help="requests at a time (default: 1)")
-    parser.add_argument("--pause", type=float, default=1.0, help="seconds each worker waits between pages (default: 1)")
+    parser.add_argument("--pause", type=float, default=3.0, help="seconds each worker waits between pages, at least (default: 3)")
     parser.add_argument("--refresh", action="store_true", help="fetch every rule again, the local copy's too")
     parser.add_argument(
         "--local-copy", type=Path, default=PROJECT_ROOT / "data" / "json" / "rule_docs_preprocessed_by_sid.json",
@@ -292,6 +320,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--limit", type=int, help="fetch at most this many (to try it)")
     args = parser.parse_args(argv)
+    socket.getaddrinfo = _remembered_lookup
 
     # One run at a time: two would fetch the same pages, twice as fast.
     args.output.parent.mkdir(parents=True, exist_ok=True)
