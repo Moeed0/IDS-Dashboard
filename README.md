@@ -125,7 +125,7 @@ network interface (afpacket)
 | `backups/` | The nightly copies of the alert database (see [Backups](#backups)) |
 | `tests/` | The tests |
 | `.github/workflows/` | On GitHub: the tests and the page's build on every push, and a release zip with the page built for each version tag |
-| `docs/` | The API and data ([docs/react-native-port.md](docs/react-native-port.md)), the export format and the modular plan |
+| `docs/` | The API and data ([docs/react-native-port.md](docs/react-native-port.md)), the export format, the modular plan and the lab network: the mirroring switch and adding routers ([docs/lab-network.md](docs/lab-network.md)) |
 
 ## Setting up a machine
 
