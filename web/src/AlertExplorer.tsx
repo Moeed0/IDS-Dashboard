@@ -195,8 +195,14 @@ export function AlertExplorer({
     },
     [setMore],
   );
+  // Once for each click (each request), not each time the page draws: it
+  // would scroll back to the top and put the rule back in the Rule box.
+  const shown = useRef<SearchRequest | null>(null);
   useEffect(() => {
-    if (searchRequest) showRule(searchRequest.text);
+    if (searchRequest && searchRequest !== shown.current) {
+      shown.current = searchRequest;
+      showRule(searchRequest.text);
+    }
   }, [searchRequest, showRule]);
   const { data: values } = useApi<FilterValues>("/alerts/values", {}, onUnauthorized, VALUES_REFRESH_MS);
   // The alert clicked, shown whole in the side panel.

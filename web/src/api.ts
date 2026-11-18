@@ -1,6 +1,6 @@
 // The API in src/dashboard_api.py; the shapes are what ids.dashboard_data
 // returns (see docs/react-native-port.md).
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type Engine = "snort" | "suricata";
 export const ENGINES: Engine[] = ["snort", "suricata"];
@@ -525,13 +525,18 @@ export function useRemembered<T extends string | number | boolean>(
     }
     return initial;
   });
-  const remember = (next: T) => {
-    setValue(next);
-    try {
-      localStorage.setItem(key, JSON.stringify(next));
-    } catch {
-      // Then the choice lasts until the page is closed.
-    }
-  };
+  // The same function on every render, so an effect or callback that uses
+  // it does not run again each time the page draws.
+  const remember = useCallback(
+    (next: T) => {
+      setValue(next);
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        // Then the choice lasts until the page is closed.
+      }
+    },
+    [key],
+  );
   return [value, remember];
 }
