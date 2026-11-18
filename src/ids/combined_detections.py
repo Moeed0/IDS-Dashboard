@@ -852,6 +852,51 @@ def _rule_text(text: Any) -> str | None:
     return text[: start + 1] + body + text[end:]
 
 
+# \x81 in a rule's regular expression: one byte, by its value.
+_PCRE_BYTE_RE = re.compile(r"\\x([0-9A-Fa-f]{2})")
+# Printable bytes that read the same written as themselves in a regular
+# expression (not . [ ] - / " ; and the other characters with a meaning there).
+_PLAIN_IN_PCRE = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:,=_<>@#%&~!'`"
+)
+
+
+def _readable_pcre(value: str) -> str:
+    """A pcre value with each \\xNN byte written as 0xNN (or as the letter,
+    digit or plain sign it is), one space between bytes that follow each
+    other: /^..[\\x81\\x82]\\x85/ reads /^..[0x81 0x82]0x85/."""
+    def byte(match: re.Match[str]) -> str:
+        code = int(match.group(1), 16)
+        char = chr(code)
+        if char in _PLAIN_IN_PCRE:
+            return char
+        written = f"0x{code:02x}"
+        following = _PCRE_BYTE_RE.match(value, match.end())
+        next_written = following and chr(int(following.group(1), 16)) not in _PLAIN_IN_PCRE
+        return written + (" " if next_written else "")
+
+    return _PCRE_BYTE_RE.sub(byte, value)
+
+
+def readable_rule_text(text: Any) -> str | None:
+    """The rule text with the bytes its regular expressions write as \\x81
+    written as 0x81, which needs no decoding (detection says what the
+    pattern matches). Every other part stays as written: the message, the
+    content matches, the other options."""
+    if not isinstance(text, str):
+        return text
+    start, end = text.find("("), text.rfind(")")
+    if start < 0 or end <= start:
+        return text
+    body = text[start + 1:end]
+    for match in reversed(list(_RULE_OPTION_RE.finditer(body))):
+        if match.group(1).lower() != "pcre" or not match.group(2):
+            continue
+        begin, finish = match.span(2)
+        body = body[:begin] + _readable_pcre(body[begin:finish]) + body[finish:]
+    return text[: start + 1] + body + text[end:]
+
+
 def _one_line(text: Any) -> str:
     return " ".join(str(text or "").split())
 
@@ -990,7 +1035,7 @@ def _rule_section(facts: Mapping[str, Any]) -> dict[str, Any]:
     # removed, and a link inside a content match is detection logic.
     return prune_empty({
         "why_triggered": section.pop("why_triggered", None),
-        "rule_text": facts.get("rule_text"),
+        "rule_text": readable_rule_text(facts.get("rule_text")),
         "documentation": documentation,
         **section,
     })
@@ -1739,7 +1784,7 @@ def build_combined_detections(
             **(
                 _rule_section(rule_facts[key])
                 if enrichment
-                else {"rule_text": rule_facts[key].get("rule_text")}
+                else {"rule_text": readable_rule_text(rule_facts[key].get("rule_text"))}
             ),
         })
         for key in by_rule

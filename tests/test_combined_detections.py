@@ -1821,6 +1821,11 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
         "0x0a, then a byte from 0x81 to 0x87, then the byte 0x85."
     )
     assert "\\" not in rule["detection"]
+    # The rule text writes the pattern's bytes as 0x81 too; its message stays.
+    assert rule["rule_text"] == (
+        'alert udp $DNS_SERVERS 53 -> any any (msg:"ET DNS Standard query response, Refused"; '
+        'pcre:"/^..[0x81 0x82 0x83 0x84 0x85 0x86 0x87]0x85/";)'
+    )
     assert document["rules"]["snort_signature:1:31978:5"]["severity"] == "Critical"
 
 
@@ -1835,4 +1840,16 @@ def test_a_snort_built_in_rule_is_described_by_snorts_own_words():
     assert document["rules"]["snort_signature:116:444:1"]["detection"] == (
         "A built-in Snort rule (116:444), with no rule text. Snort's own description of "
         "what it detects: (ipv4) IPv4 option set"
+    )
+
+
+def test_rule_text_writes_a_patterns_bytes_by_value_and_leaves_the_rest():
+    from ids.combined_detections import readable_rule_text
+
+    assert readable_rule_text(
+        'alert tcp any any -> any any (msg:"a \\x41"; content:"|0D 0A|"; '
+        'pcre:"/\\x3a\\x2e\\x41\\x2d\\x00/i";)'
+    ) == (
+        'alert tcp any any -> any any (msg:"a \\x41"; content:"|0D 0A|"; '
+        'pcre:"/:0x2eA0x2d 0x00/i";)'
     )

@@ -257,7 +257,12 @@ only when the file has something to say about it. Each rule has
   (value of zero)");
 - its `ids_output` part (see The IDS output in parts);
 - its `rule_text`: the rule as written in the local Snort or Suricata rule
-  file, without
+  file, its regular expressions' bytes written by value, `\x81` as `0x81`
+  (with a space between such bytes; a letter, digit or plain sign as
+  itself): `pcre:"/^..[\x81\x82\x83\x84\x85\x86\x87]\x85/"` reads
+  `pcre:"/^..[0x81 0x82 0x83 0x84 0x85 0x86 0x87]0x85/"`. The message,
+  content matches and other options stay as written. The file's
+  `detection` says what the pattern matches. Also without
 
 - its `sid`, `gid` and `rev` options, which the rule's name gives (11.1);
 - its `classtype`, which the alert's `class` (Snort) or `category`
