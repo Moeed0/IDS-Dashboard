@@ -258,7 +258,7 @@ def _places(document, engine, path, value):
 def _without_output(rule):
     """A rule's entry without its IDS output and the words every rule has
     (its severity, what it looks for), which their own test checks."""
-    return {key: value for key, value in rule.items() if key not in ("ids_output", "severity", "detection")}
+    return {key: value for key, value in rule.items() if key not in ("ids_output", "detection")}
 
 
 def _walk(value):
@@ -613,19 +613,17 @@ def test_ids_output_is_each_engines_whole_record():
     # packet's time in the engine's own format.
     assert document["rules"] == {
         "snort_signature:1:31978:5": {
-            "severity": "Critical",
             "ids_output": {
                 "msg": "OS-OTHER Bash CGI environment variable injection attempt",
                 "class": "Attempted Administrator Privilege Gain",
-                "priority": 1,
+                "priority": "Critical",
             },
         },
         "suricata_signature:1:2019232:7": {
-            "severity": "Critical",
             "ids_output": {"alert": {
                 "signature": "ET WEB_SERVER Possible CVE-2014-6271 Attempt in Headers",
                 "category": "Attempted Administrator Privilege Gain",
-                "severity": 1,
+                "severity": "Critical",
                 "metadata": {
                     "confidence": ["Medium"], "created_at": ["2014_09_25"],
                     "cve": ["CVE_2014_6271"],
@@ -676,7 +674,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "14.1"
+    assert document["schema_version"] == "14.2"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -1814,7 +1812,9 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
     document = _build([_snort_row(), _suricata_row(dns)], rule_intelligence=intelligence)
 
     rule = document["rules"]["suricata_signature:1:2001119:6"]
-    assert rule["severity"] == "Low"
+    # The engines' severity numbers in words: 1 Critical, 2 Medium, 3 Low, 4 Info.
+    assert rule["ids_output"]["alert"]["severity"] == "Low"
+    assert "severity" not in rule
     assert rule["detection"] == (
         "The rule inspects UDP traffic. It alerts only when the source port is 53; and the "
         "inspected data matches the regular expression: at the start, any 2 bytes other than "
@@ -1831,7 +1831,11 @@ def test_each_rule_says_its_severity_and_what_it_looks_for_in_words():
         'alert udp $DNS_SERVERS 53 -> any any (msg:"ET DNS Standard query response, Refused"; '
         'pcre:"/^..[0x81 0x82 0x83 0x84 0x85 0x86 0x87]0x85/";)'
     )
-    assert document["rules"]["snort_signature:1:31978:5"]["severity"] == "Critical"
+    assert document["rules"]["snort_signature:1:31978:5"]["ids_output"]["priority"] == "Critical"
+    # The rebuild gives the engines' numbers back.
+    for packet, engine, entry, name in _alerts(document):
+        rebuilt = _full_output(document, packet, engine, entry, name)
+        assert (rebuilt["priority"] if engine == "snort" else rebuilt["alert"]["severity"]) in (1, 3)
 
 
 def test_a_snort_built_in_rule_is_described_by_snorts_own_words():

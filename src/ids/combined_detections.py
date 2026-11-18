@@ -59,7 +59,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "14.1"
+SCHEMA_VERSION = "14.2"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -1249,15 +1249,37 @@ SEVERITY_WORDS = {1: "Critical", 2: "Medium", 3: "Low", 4: "Info"}
 _GENERIC_DETECTION = "The traffic matched the conditions defined by the IDS rule."
 
 
-def severity_word(engine: str, native: Mapping[str, Any]) -> str | None:
-    """The alert's severity in words: Critical (1), Medium (2), Low (3) or
-    Info (4 and above)."""
-    value = native.get("priority") if engine == "snort" else _dict(native.get("alert")).get("severity")
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return None
-    return SEVERITY_WORDS[min(4, max(1, number))]
+# Where each engine writes its severity number: Snort's priority, Suricata's
+# alert.severity. The file gives it in words; the rebuild turns it back.
+_SEVERITY_PATHS = {"snort": ("priority",), "suricata": ("alert", "severity")}
+_SEVERITY_NUMBERS = {word: number for number, word in SEVERITY_WORDS.items()}
+
+
+def _severity_in_words(engine: str, output: dict[str, Any]) -> dict[str, Any]:
+    """The output with its severity number 1 to 4 as a word (3 is "Low");
+    another value stays as the engine wrote it."""
+    *parents, field = _SEVERITY_PATHS[engine]
+    holder: Any = output
+    for key in parents:
+        holder = holder.get(key) if isinstance(holder, dict) else None
+    if isinstance(holder, dict):
+        value = holder.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value in SEVERITY_WORDS:
+            holder[field] = SEVERITY_WORDS[value]
+    return output
+
+
+def _severity_in_numbers(engine: str, output: dict[str, Any]) -> dict[str, Any]:
+    """The output with its severity word back as the engine's number."""
+    *parents, field = _SEVERITY_PATHS[engine]
+    holder: Any = output
+    for key in parents:
+        holder = holder.get(key) if isinstance(holder, dict) else None
+    if isinstance(holder, dict) and isinstance(holder.get(field), str):
+        number = _SEVERITY_NUMBERS.get(holder[field])
+        if number is not None:
+            holder[field] = number
+    return output
 
 
 def detection_words(rule_text: Any) -> str | None:
@@ -1524,7 +1546,7 @@ def rebuild_ids_output(
                 output[_DERIVED_PAYLOAD_TEXT] = derived
         elif output[_DERIVED_PAYLOAD_TEXT] is None:
             del output[_DERIVED_PAYLOAD_TEXT]
-    return output
+    return _severity_in_numbers(engine, output)
 
 
 def _packet_document(
@@ -1735,7 +1757,11 @@ def build_combined_detections(
         for match in packet.matches:
             outputs[id(match)] = _without_packet_fields(
                 match.engine,
-                _without_derived(match.engine, ids_output(match.engine, match.native), match.time_us),
+                _without_derived(
+                    match.engine,
+                    _severity_in_words(match.engine, ids_output(match.engine, match.native)),
+                    match.time_us,
+                ),
                 facts[index],
             )
             packet_of[id(match)] = index
@@ -1774,7 +1800,6 @@ def build_combined_detections(
     outputs = {key: prune_empty(output) for key, output in outputs.items()}
     rule_entries = {
         key: prune_empty({
-            "severity": severity_word(by_rule[key][0].engine, by_rule[key][0].native),
             # The enrichment's why_triggered says it already.
             "detection": None if enrichment else (
                 detection_words(rule_facts[key].get("rule_text"))
