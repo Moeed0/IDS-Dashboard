@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Fetched, Status, Storage, TestAlert } from "./api";
-import { backupLate, diskLow, summary, testMissed } from "./StatusPanel";
+import { backupLate, diskLow, noteKey, summary, testMissed } from "./StatusPanel";
 
 const NOW = Date.UTC(2026, 10, 11, 12, 0);
 const HOUR = 60 * 60 * 1000;
@@ -99,5 +99,14 @@ describe("the hourly test alert", () => {
   it("says nothing about now from a test over two hours old, or none", () => {
     expect(testMissed(status({ test_alert: test(NOW - 3 * HOUR, false) }).data!, NOW)).toEqual([]);
     expect(testMissed(status({ test_alert: null }).data!, NOW)).toEqual([]);
+  });
+
+  it("keeps a closed note about one missed test closed, and shows the next test's miss", () => {
+    const first = status({ test_alert: test(NOW - HOUR / 2, false) }).data;
+    const next = status({ test_alert: test(NOW + HOUR / 2, false) }).data;
+
+    expect(noteKey("Test alert missed", first)).toBe(noteKey("Test alert missed", first));
+    expect(noteKey("Test alert missed", next)).not.toBe(noteKey("Test alert missed", first));
+    expect(noteKey("Partly working", first)).toBe("Partly working");
   });
 });

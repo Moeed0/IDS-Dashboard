@@ -4,8 +4,9 @@
 // right side, a panel (StatusPanel): what is stored, each engine's dropped
 // packets, the disk and HOME_NET. The "… ago" times count on between
 // answers, and when none comes. The Alert Explorer has neither: there a
-// line says so only when something is wrong (StatusNote).
-import type { ReactNode } from "react";
+// line says so only when something is wrong (StatusNote), and its × closes
+// it until something else is wrong.
+import { useEffect, type ReactNode } from "react";
 import {
   ENGINES,
   NAMES,
@@ -18,6 +19,7 @@ import {
   type Fetched,
   type Status,
   type Storage,
+  useRemembered,
 } from "./api";
 import { clock, duration } from "./time";
 
@@ -141,15 +143,35 @@ function Dot({ running }: { running: boolean | null }) {
   );
 }
 
-/** Over the Alert Explorer: what is wrong, and nothing while the IDS is live. */
+/** What a closed note was, so the same one stays closed and the next one
+ * shows: a missed test alert by when that test ran (the next hour's miss
+ * shows again), anything else by what is wrong. */
+export function noteKey(label: string, data: Status | null | undefined): string {
+  if (label === "Test alert missed") return `${label} ${data?.test_alert?.sent_ms ?? ""}`;
+  return label;
+}
+
+/** Over the Alert Explorer: what is wrong, and nothing while the IDS is live.
+ * Its × closes it until something else is wrong. */
 export function StatusNote({ status }: { status: Fetched<Status> }) {
   const now = useNow();
   const { level, label, detail } = summary(status, machineTime(status, now) ?? now, now);
-  if (level === "ok" || level === "unknown") return null;
+  const [closed, setClosed] = useRemembered<string>("ids.closedStatusNote", "");
+  const key = noteKey(label, status.data);
+  // Once all is well, the next thing wrong shows even if it is the same again.
+  useEffect(() => {
+    if (level === "ok" && closed) setClosed("");
+  }, [level, closed, setClosed]);
+  if (level === "ok" || level === "unknown" || closed === key) return null;
   return (
-    <p className="warning" role="status">
-      <strong>{label}</strong>
-      {detail && `: ${detail}`}
+    <p className="warning status-note" role="status">
+      <span>
+        <strong>{label}</strong>
+        {detail && `: ${detail}`}
+      </span>
+      <button type="button" className="note-close" aria-label="Close this message" title="Close" onClick={() => setClosed(key)}>
+        ×
+      </button>
     </p>
   );
 }
