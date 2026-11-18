@@ -242,7 +242,7 @@ def _places(document, engine, path, value):
     engine-wide defaults, a rule, a flow, a packet's shared part or an entry."""
     parts = [document.get("ids_output", {}).get(engine, {})]
     parts += [rule.get("ids_output", {}) for name, rule in document.get("rules", {}).items()
-              if name.startswith(engine + ":")]
+              if name.startswith(f"{engine}_signature:")]
     parts += [flow.get(engine, {}) for flow in document.get("flows", {}).values()]
     for packet in document["packets"]:
         parts.append(packet.get("ids_output", {}).get(engine, {}))
@@ -672,7 +672,7 @@ def test_alert_counts_leave_out_an_engine_that_raised_none():
         "schema", "schema_version", "generated_at", "window", "alerts", "ids_output",
         "rules", "packets",
     ]
-    assert document["schema_version"] == "12.0"
+    assert document["schema_version"] == "13.0"
     assert document["alerts"] == {"snort": 2, "suricata": 2}
     assert not {
         "classification", "guidance", "summary", "routine", "sessions",
@@ -1718,9 +1718,10 @@ def test_what_every_alert_of_an_engine_shares_is_given_once_for_the_file():
     assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
 
 
-def test_a_value_most_alerts_share_is_stored_once_and_its_absence_is_null():
-    # Two alerts with Suricata's pcap file, one without it: the file is
-    # given once, and the alert that has none says so with null.
+def test_only_a_value_every_alert_shares_goes_in_the_files_ids_output():
+    # Three alerts with Suricata's pcap file, one without it: the file is
+    # not shared by all, so it isn't in the file's ids_output, and the alert
+    # without it has nothing in its place.
     with_file = [
         _suricata_native(capture_file="/var/log/suricata/log.pcap.1"),
         _suricata_native(
@@ -1739,10 +1740,18 @@ def test_a_value_most_alerts_share_is_stored_once_and_its_absence_is_null():
 
     document = _build(rows)
 
-    assert document["ids_output"]["suricata"]["capture_file"] == "/var/log/suricata/log.pcap.1"
-    assert _places(document, "suricata", ("capture_file",), "/var/log/suricata/log.pcap.1") == 1
+    assert "capture_file" not in document.get("ids_output", {}).get("suricata", {})
     igmp = next(packet for packet in document["packets"] if packet.get("protocol") == "IGMP")
-    assert igmp["suricata"][0]["ids_output"]["capture_file"] is None
+    assert "capture_file" not in igmp["suricata"][0].get("ids_output", {})
+    # event_type is the same on every alert: given once, for the engine.
+    assert document["ids_output"]["suricata"]["event_type"] == "alert"
+    assert _places(document, "suricata", ("event_type",), "alert") == 1
+    # Each rule's entry says everything about the rule, even what all the
+    # alerts share.
+    for name, rule in document["rules"].items():
+        assert {"category", "severity"} <= set(rule["ids_output"]["alert"]), name
+    assert document["ids_output"]["suricata"]["alert"] == {"action": "allowed"}
+    assert "null" not in json.dumps(document["packets"])
     rebuilt = sorted(
         json.dumps(_full_output(document, packet, engine, entry, rule), sort_keys=True)
         for packet, engine, entry, rule in _alerts(document)
@@ -1750,7 +1759,7 @@ def test_a_value_most_alerts_share_is_stored_once_and_its_absence_is_null():
     assert rebuilt == sorted(json.dumps(json.loads(row["raw_json"]), sort_keys=True) for row in rows)
 
 
-def test_a_field_the_engine_wrote_as_null_is_never_a_default():
+def test_a_field_the_engine_wrote_as_null_on_some_alerts_is_never_a_default():
     rows = [
         _suricata_row(_suricata_native(tag=None)),
         _suricata_row(_suricata_native(tag=None, timestamp="2026-10-15T15:54:02.690000+0500"),

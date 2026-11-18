@@ -58,7 +58,7 @@ from ids.extended_alert_intelligence import (
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "12.0"
+SCHEMA_VERSION = "13.0"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -1310,30 +1310,27 @@ def _set_path(target: dict[str, Any], path: tuple[str, ...], value: Any) -> None
 
 
 def _engine_defaults(engine: str, outputs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Each field's most common value among the engine's alerts, when giving
-    it once saves writing it: alerts with that value then leave it out, an
-    alert with another value keeps its own, and an alert without the field
-    says so with null (written where the field, or the object holding it,
-    is missing). Taken only when the value's alerts outnumber the alerts that
-    need null by two or more, and never for a field the engine itself wrote
-    as null on some alert."""
+    """The fields every one of the engine's alerts has with the same value,
+    given once for all of them. The fields that describe a rule (its
+    message, class or category, priority or severity, metadata) are left to
+    each rule's entry, so a rule's entry says everything about the rule."""
     if len(outputs) < 2:
         return {}
     excluded = _not_defaulted(engine)
-    counts: dict[tuple[str, ...], dict[str, list[Any]]] = {}
-    for output in outputs:
-        for path in _leaf_paths(output):
-            if path in excluded:
-                continue
-            value = _get_path(output, path)
-            counts.setdefault(path, {}).setdefault(_value_key(value), [value, 0])[1] += 1
+    rule_fields = _RULE_FIELDS[engine]
+    first = outputs[0]
     defaults: dict[str, Any] = {}
-    for path, values in counts.items():
-        value, count = max(values.values(), key=lambda item: item[1])
-        missing = sum(_missing_prefix(output, path) is not None for output in outputs)
-        if count < missing + 2 or any(_null_on_the_way(output, path) for output in outputs):
+    for path in _leaf_paths(first):
+        if path in excluded or any(path[: len(field)] == field for field in rule_fields):
             continue
-        _set_path(defaults, path, value)
+        value = _value_key(_get_path(first, path))
+        if all(
+            _missing_prefix(output, path) is None
+            and _get_path(output, path) is not _MISSING
+            and _value_key(_get_path(output, path)) == value
+            for output in outputs[1:]
+        ):
+            _set_path(defaults, path, _get_path(first, path))
     return defaults
 
 
@@ -1655,8 +1652,8 @@ def build_combined_detections(
             )
             packet_of[id(match)] = index
 
-    # Each field's most common value per engine is given once, in the file's
-    # ids_output; each alert keeps only what differs from it.
+    # A field every alert of an engine has with the same value is given once,
+    # in the file's ids_output.
     defaults = {
         engine: _engine_defaults(
             engine, [outputs[id(match)] for match in matches if match.engine == engine]

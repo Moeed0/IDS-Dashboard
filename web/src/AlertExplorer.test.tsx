@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ruleEntry } from "./AlertDetail";
-import { SeverityCircles, arrived, filledCircles, packetKey, packetShades, tableRequest } from "./AlertExplorer";
+import { SeverityLabel, arrived, packetKey, packetShades, severityWord, tableRequest } from "./AlertExplorer";
 import type { AlertRow } from "./api";
 
 /** A row on ``packet``; the list puts the newest first. */
@@ -45,18 +45,17 @@ describe("packetShades", () => {
   });
 });
 
-describe("severity circles", () => {
-  it("fills one circle more for each step more severe", () => {
-    expect([1, 2, 3, 4].map(filledCircles)).toEqual([3, 2, 1, 0]);
-    expect([0, 5].map(filledCircles)).toEqual([3, 0]);
+describe("severity in words", () => {
+  it("names each severity, 1 the most severe", () => {
+    expect([1, 2, 3, 4].map(severityWord)).toEqual(["Critical", "Medium", "Low", "Info"]);
+    expect([0, 5].map(severityWord)).toEqual(["Critical", "Info"]);
   });
 
-  it("draws three circles, says the severity, and colours them by it", () => {
-    const markup = renderToStaticMarkup(<SeverityCircles severity={2} />);
+  it("writes the word, coloured by the severity", () => {
+    const markup = renderToStaticMarkup(<SeverityLabel severity={2} />);
 
-    expect(markup.match(/<i/g)).toHaveLength(3);
-    expect(markup.match(/class="filled"/g)).toHaveLength(2);
-    expect(markup).toContain('title="Severity 2: high"');
+    expect(markup).toContain(">Medium<");
+    expect(markup).toContain('title="Severity 2"');
     expect(markup).toContain("level-2");
   });
 });

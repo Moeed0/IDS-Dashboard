@@ -62,31 +62,28 @@ const PACKET: Column = {
   hint: "The packet's ID, the same on all its alerts: its first alert's UID, from the minute it came in and its number in it",
 };
 const RULE: Column = { title: "Rule", value: ruleName, className: "rule", hint: "GID:SID:Rev" };
-const SEVERITY_WORDS = ["", "most severe", "high", "medium", "not critical"];
+// The engines count severity from 1, the most severe, to 4 (Snort's
+// priority, Suricata's severity): said in words.
+const SEVERITY_WORDS = ["", "Critical", "Medium", "Low", "Info"];
 
-/** How many of the three circles are filled: 3 for severity 1, none for 4. */
-export function filledCircles(severity: number): number {
-  return Math.min(3, Math.max(0, 4 - severity));
+/** A severity in words: Critical (1), Medium (2), Low (3), Info (4 and up). */
+export function severityWord(severity: number): string {
+  return SEVERITY_WORDS[Math.min(4, Math.max(1, severity))];
 }
 
-export function SeverityCircles({ severity }: { severity: number }) {
-  const words = `Severity ${severity}: ${SEVERITY_WORDS[severity] ?? ""}`;
+export function SeverityLabel({ severity }: { severity: number }) {
   return (
-    <span className={`levels level-${severity}`} role="img" aria-label={words} title={words}>
-      {[1, 2, 3].map((circle) => (
-        <i key={circle} className={circle <= filledCircles(severity) ? "filled" : undefined} />
-      ))}
+    <span className={`levels level-${Math.min(4, Math.max(1, severity))}`} title={`Severity ${severity}`}>
+      {severityWord(severity)}
     </span>
   );
 }
-// Three circles, filled as the alert is more severe: the engines count the
-// other way, 1 the most severe and 4 the least.
 const SEVERITY: Column = {
   title: "Severity",
   value: (row) => String(row.severity),
   className: "severity",
-  hint: "Filled circles: 3 is severity 1 (the most severe), none is severity 4",
-  render: (row) => <SeverityCircles severity={row.severity} />,
+  hint: "Critical is severity 1 (the most severe), then Medium (2), Low (3) and Info (4)",
+  render: (row) => <SeverityLabel severity={row.severity} />,
 };
 // The message comes last and takes the width the others leave, on one line:
 // a longer one ends in "…" and shows whole on hover.
@@ -262,7 +259,7 @@ export function AlertExplorer({
                   change({ severities: on ? filters.severities.filter((chosen) => chosen !== level) : [...filters.severities, level] })
                 }
               >
-                <SeverityCircles severity={level} />
+                <SeverityLabel severity={level} />
               </button>
             );
           })}

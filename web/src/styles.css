@@ -122,22 +122,14 @@ tr.shaded td {
   white-space: nowrap;
 }
 
+/* A severity in words, coloured by it: Critical, Medium, Low, Info. */
 .levels {
-  display: inline-flex;
-  gap: 3px;
+  display: inline-block;
   vertical-align: middle;
   color: var(--muted);
-}
-
-.levels i {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-}
-
-.levels i.filled {
-  background: currentColor;
+  font-weight: 600;
+  font-size: 0.92em;
+  white-space: nowrap;
 }
 
 .level-1 {
@@ -1027,14 +1019,6 @@ td.bar.suricata {
   gap: 3px;
 }
 
-.filters.compact .levels {
-  gap: 2px;
-}
-
-.filters.compact .levels i {
-  width: 7px;
-  height: 7px;
-}
 
 .filters.compact input[type="checkbox"] {
   margin: 0;

@@ -1,6 +1,7 @@
 // The alerts the Alert Explorer's filters choose, as one combined JSON file
-// (see docs/combined-json-format.md): two buttons, to download it or send it
-// to the LLM PC, whose hover text says what the file would hold. Only the
+// (see docs/combined-json-format.md): buttons to look at it in a new tab
+// first, download it or send it to the LLM PC, whose hover text says what
+// the file would hold. Only the
 // outcome of a click is written out, a success for a few seconds.
 import { useEffect, useState } from "react";
 import {
@@ -11,6 +12,7 @@ import {
   errorText,
   sendSelection,
   useApi,
+  viewSelection,
   type Options,
   type Params,
   type SelectionInfo,
@@ -39,7 +41,7 @@ export function CombinedExport({
   onUnauthorized: () => void;
 }) {
   const { data: info, error } = useApi<SelectionInfo>("/export/selection", params, onUnauthorized, INFO_REFRESH_MS);
-  const [busy, setBusy] = useState<"download" | "send" | null>(null);
+  const [busy, setBusy] = useState<"view" | "download" | "send" | null>(null);
   const [result, setResult] = useState<{ text: string; failed: boolean } | null>(null);
   // Other filters choose other alerts: the last result was about those.
   const chosen = JSON.stringify(params);
@@ -51,11 +53,13 @@ export function CombinedExport({
     return () => window.clearTimeout(timer);
   }, [result]);
 
-  async function run(kind: "download" | "send") {
+  async function run(kind: "view" | "download" | "send") {
     setBusy(kind);
     setResult(null);
     try {
-      if (kind === "download") {
+      if (kind === "view") {
+        await viewSelection(params);
+      } else if (kind === "download") {
         setResult({ text: `Saved ${await downloadSelection(params)}`, failed: false });
       } else {
         const sent = await sendSelection(params);
@@ -85,6 +89,7 @@ export function CombinedExport({
           ? `One file holds at most ${count(info.max_alerts)} alerts: show only the newest few, or narrow the filters`
           : "");
   const downloadHint = why || (info ? `Download ${holding(options, info)}, as combined JSON` : "");
+  const viewHint = why || (info ? `Open ${holding(options, info)} in a new tab, to see the file before downloading it` : "");
   const sendHint = !options.send_to
     ? "Send is off: put the LLM PC's address in IDS_LLM_URL in .env, then restart the dashboard"
     : why || (info ? `Send ${holding(options, info)} to the LLM PC at ${options.send_to}` : "");
@@ -92,6 +97,11 @@ export function CombinedExport({
   return (
     <>
       {/* A disabled button shows no hover text in every browser: its box does. */}
+      <span title={viewHint}>
+        <button type="button" disabled={!ready} onClick={() => run("view")}>
+          {busy === "view" ? "Opening…" : "View"}
+        </button>
+      </span>
       <span title={downloadHint}>
         <button type="button" className="primary" disabled={!ready} onClick={() => run("download")}>
           {busy === "download" ? "Preparing…" : "Download JSON"}

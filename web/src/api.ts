@@ -398,6 +398,25 @@ export async function downloadSelection(params: Params): Promise<string> {
   return filename;
 }
 
+/** Shows the combined JSON of the alerts the filters choose in a browser tab
+ * (Firefox lays it out to read), without saving it. The tab is opened at the
+ * click, before the file is fetched, so the browser doesn't block it. */
+export async function viewSelection(params: Params): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const response = await request("/export/selection/file", params);
+    const text = await response.text();
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    if (tab) tab.location.href = url;
+    else window.location.assign(url);
+    // The tab has it by then; the memory goes back after a minute.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (reason) {
+    tab?.close();
+    throw reason;
+  }
+}
+
 /** Sends the combined JSON of the alerts the filters choose to the LLM PC. */
 export async function sendSelection(params: Params): Promise<SentSelection> {
   return (await (await request("/export/selection/send", params, undefined, "POST")).json()) as SentSelection;

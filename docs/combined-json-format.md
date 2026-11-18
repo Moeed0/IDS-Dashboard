@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 12.0)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 13.0)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -17,11 +17,15 @@ filters holds only the alerts they choose (a rule, a severity, an address,
 the newest 20, …): its window then says when, and other alerts of that time
 are not in it. Nothing is written twice (9.0):
 
-- each field's most common value among an engine's alerts in the file (its
-  capture interface, the pass action, the pcap file, a direction, rule
-  metadata dates that many rules share) is given once, as a default, in the
-  top-level `ids_output` (10.1; 10.0 took only values every alert shared);
-- what is the same for every alert of a rule is given once in `rules`;
+- what every one of an engine's alerts in the file has with the same value
+  (its capture interface, the pass action, the event type) is given once, in
+  the top-level `ids_output` (13.0; 10.1 to 12.0 took each field's most
+  common value, which hid a rule's details there and needed `null` for the
+  alerts without it);
+- what describes a rule (message, class or category, priority or severity,
+  metadata) is always in that rule's entry in `rules`, even when every alert
+  shares it, so each rule's entry says everything about the rule (13.0), and
+  anything else the same for every alert of a rule is given there once;
 - what is the same for every alert of an engine on one connection is given
   once in `flows`;
 - what says what the packet is is given once, with the packet, and so is
@@ -46,7 +50,7 @@ in every file.
 |---|---|
 | `window` | Start, end and length of the time window. Times are PKT (`+05:00`). The window ends where both engines' alerts are stored at the latest (see Window end). A file of the Alert Explorer's filters has the time range chosen, or with the newest N alerts (or no range) their own span in whole seconds (`"length": "104 seconds"`). |
 | `alerts` | How many alerts each engine raised in the window; an engine that raised none is left out (`{"snort": 3}`). |
-| `ids_output` | Per engine: each output field's most common value among its alerts in the file, given once as a default (`{"snort": {"iface": "ens34", …}}`, 10.1). See The IDS output in parts. |
+| `ids_output` | Per engine: the output fields every one of its alerts in the file has with the same value, given once (`{"snort": {"iface": "ens34", …}}`, 13.0). Never a rule's details: those are in `rules`. See The IDS output in parts. |
 | `rules` | Each rule that fired in the window, once: its IDS output fields and its rule text. |
 | `flows` | Each connection with output the same on every alert of an engine on it, once, by number. |
 | `packets` | The packets the engines alerted on, oldest first. |
@@ -163,17 +167,10 @@ restarts), or Suricata the same time and raw packet.
 Each alert's whole record, exactly as the engine wrote it, is these parts put
 together:
 
-1. the engine's defaults in the file's top-level `ids_output` (10.1): each
-   field's most common value among the engine's alerts. An alert with that
-   value leaves the field out; an alert with another value gives its own,
-   which replaces the default; an alert the engine wrote without the field
-   says so with `null`, written where the field (or the object that would
-   hold it) is missing, such as `"capture_file": null`. A default is taken
-   only when its value's alerts outnumber the alerts that need `null` by two
-   or more, never for a rule's identity (SID, GID, revision, message, Snort's
-   `rule`), the `timestamp` or `payload_printable`, and never for a field the
-   engine itself wrote as `null` on some alert, so a `null` at a default's
-   field always means "not written";
+1. what the engine's alerts all share, in the file's top-level `ids_output`
+   (13.0): a field every one of the engine's alerts has, with the same value.
+   Never what describes a rule (part 2), a rule's identity, the `timestamp`
+   or `payload_printable`;
 2. the rule's `ids_output` in `rules`: the fields that describe the rule
    (Snort `msg`, `class`, `priority`, `gid`, `rev`, `rule`; Suricata
    `alert.signature`, `category`, `severity`, `gid`, `rev`, `metadata`) when
@@ -219,13 +216,12 @@ together:
    engine wrote; otherwise it stays, such as Suricata's text of reassembled
    stream data, which is not the packet's own payload.
 
-Parts 2 to 5 never hold the same field twice; each can replace a default
-from part 1. So they are merged key by key (inside `alert` and `flow` too),
-the defaults first, and then each `null` at a default's field is removed.
-`ids.combined_detections.rebuild_ids_output` does this; the tests and a check
-on the live data (all 31,949 alerts stored on 17 Nov 2026 by 17:20, with
-12.0) rebuild each alert's record exactly as the engine wrote it. The defaults made those
-files 9 to 15% smaller than 10.0's.
+Parts 1 to 5 never hold the same field twice. So they are merged key by key
+(inside `alert` and `flow` too). `ids.combined_detections.rebuild_ids_output`
+does this; the tests and a check on the live data (the newest 3,000 alerts
+on 18 Nov 2026, with 13.0) rebuild each alert's record exactly as the engine
+wrote it. The IDS output has no `null` but Suricata's `payload_printable`
+one (part 8).
 
 ## Rules
 
@@ -340,10 +336,12 @@ The dashboard calls it "App" and filters by it.
 
 ## What can still look repeated
 
-- The second most common value of a field: only the most common one is a
-  default, so an alert with another MAC address, pcap file or direction
-  writes its own, and alerts that share it each write it unless a rule,
+- A value most, but not all, of an engine's alerts share (a MAC address, a
+  pcap file, a direction): only a value every alert shares is in the
+  top-level `ids_output`, so the alerts with it each write it unless a rule,
   flow or packet holds it for them.
+- A rule detail every rule shares (all severity 3, say): each rule's entry
+  gives its own, so a rule's entry is complete.
 - Values of different packets that happen to be equal, such as a packet count
   of 1 on two one-packet connections, or the same TTL on packets of different
   rules. Each belongs to its own packet.
