@@ -74,9 +74,10 @@ own first address, 192.168.0.1, is the Archer's old one).
    address **192.168.0.10**, mask 255.255.255.0, no gateway.
 2. Open http://192.168.0.1 and log in with the default account printed on
    the switch's label. It asks for a new password: choose one and keep it.
-3. **Mirroring** (L2 Features → Mirroring; on older firmware Switching →
-   Port Mirror): session 1, **destination port 8**, **source port 2**,
-   **ingress and egress** both on.
+3. **Mirroring** (MAINTENANCE → Mirroring, the Port Mirroring Session
+   List): **Edit** session 1, **destination port 1/0/8**, **source port
+   1/0/2** with mode **Both** (ingress and egress). Then click **Save** at
+   the top of the page.
 4. **Its address** (L3 Features → Interface, VLAN 1; on older firmware
    System → System IP): fixed, **192.168.50.2**, mask 255.255.255.0,
    gateway 192.168.50.1. The page stops answering at the old address.
