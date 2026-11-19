@@ -10,8 +10,8 @@ VM's `ens34`, which is bridged to the IDS PC's Ethernet port.
                      │ yellow LAN port        (blue WAN port: empty)
                      ▼
    ┌──────────── TP-Link TL-SG3210 switch (192.168.50.2) ────────────┐
-   │ port 1: Archer C6   port 2: laptop (mirrored)   ports 3-7: free │
-   │ port 8: IDS PC  ◄── gets a copy of every packet on port 2       │
+   │ port 1: Archer C6   port 2: laptop   ports 3-7: free            │
+   │ port 8: IDS PC  ◄── a copy of every packet entering ports 1-7   │
    └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -21,7 +21,7 @@ VM's `ens34`, which is bridged to the IDS PC's Ethernet port.
 | --- | --- | --- | --- |
 | Main router | TP-Link Archer C6 v6 | Gateway, DHCP and Wi-Fi for the lab; no internet | 192.168.50.1 |
 | Switch | TP-Link TL-SG3210 v3 (8 × 1 Gbit + 2 SFP, L2+ managed) | Joins the lab; mirrors chosen ports to port 8 | 192.168.50.2 (fixed) |
-| IDS PC | Windows host, Ubuntu VM | Listens on switch port 8 (`ens34`, MAC 00:0c:29:1e:da:cb) | 192.168.50.135 (reserved in the router) |
+| IDS PC | Windows host, Ubuntu VM | Listens on switch port 8 (`ens34`, MAC 00:0c:29:1e:da:cb) | VM 192.168.50.135 (reserved in the router); Windows host by DHCP (192.168.50.143 on 19 Nov 2026) |
 
 Address plan, so that added devices never clash:
 
@@ -41,9 +41,9 @@ lab changes.
 
 | Port | Connected to | Mirrored |
 | --- | --- | --- |
-| 1 | Archer C6 (a yellow LAN port) | no |
-| 2 | Laptop used for tests | **yes**, ingress and egress |
-| 3-7 | free | see "Choosing what to mirror" |
+| 1 | Archer C6 (a yellow LAN port) | **yes**, ingress only |
+| 2 | Laptop used for tests | **yes**, ingress only |
+| 3-7 | free (for more devices, switches or routers) | **yes**, ingress only |
 | 8 | IDS PC | mirror **destination** |
 
 ## 1. The Archer C6 (main router)
@@ -75,9 +75,10 @@ own first address, 192.168.0.1, is the Archer's old one).
 2. Open http://192.168.0.1 and log in with the default account printed on
    the switch's label. It asks for a new password: choose one and keep it.
 3. **Mirroring** (MAINTENANCE → Mirroring, the Port Mirroring Session
-   List): **Edit** session 1, **destination port 1/0/8**, **source port
-   1/0/2** with mode **Both** (ingress and egress). Then click **Save** at
-   the top of the page.
+   List): **Edit** session 1. Destination Port Config: port **8**, Apply.
+   Source Interfaces Config: tick **1/0/1 to 1/0/7**, **Ingress Enable**,
+   **Egress Disable**, Apply. Back on the list: destination 1/0/8, sources
+   1/0/1-7, mode Ingress. Then click **Save** at the top of the page.
 4. **Its address** (L3 Features → Interface, VLAN 1; on older firmware
    System → System IP): fixed, **192.168.50.2**, mask 255.255.255.0,
    gateway 192.168.50.1. The page stops answering at the old address.
@@ -114,19 +115,26 @@ own first address, 192.168.0.1, is the Archer's old one).
 
 The TL-SG3210 copies the chosen source ports to **one** of its own ports (8).
 
-- **Each packet should cross only one mirrored port.** A packet that enters
-  one mirrored port and leaves by another is copied twice, and the engines
-  raise its alerts twice. So don't mirror port 1 (the router) together with
-  device ports.
-- Mirroring the **laptop's port** shows everything the laptop sends and
-  receives, once. A test machine you attack from or to goes on a mirrored
-  port.
-- Mirroring **only port 1** instead shows everything between any device and
-  the router (and the internet, if the lab ever gets it), but not
-  device-to-device traffic on the switch.
+- **Every port except 8, ingress only** (the setup above). Every packet
+  enters the switch through exactly one port, so copying what *enters* each
+  port gives the IDS every packet that crosses the switch **once**: the
+  laptop's ping enters port 2, the router's reply enters port 1. This covers
+  the router, every device and device-to-device traffic on the switch.
+- Don't use **Both** (ingress and egress) on more than one port: a packet
+  entering one mirrored port and leaving by another is copied twice, and
+  the engines raise its alerts twice.
+- The IDS PC's own traffic (the VM and the Windows host, port 8) still
+  reaches the IDS normally. Replies to it enter a mirrored port, so they
+  arrive twice: once delivered, once as the copy (`ping` from the VM shows
+  "+1 duplicates"). Traffic between other devices is seen once.
 - Traffic that stays inside the Archer C6 (between its Wi-Fi devices, or its
   own yellow ports) never reaches the switch. Plug test machines into the
   switch.
+- The lab has no internet, so each DNS lookup a device makes is answered
+  "Refused" by the Archer, and the router sends UPnP and IPv6 announcements
+  on its own. With the whole switch mirrored these are seen too: on 19 Nov
+  2026 that was about 2,500 alerts every 10 minutes with the laptop and the
+  IDS PC connected, with no dropped packets.
 
 ## Growing the lab
 
@@ -136,11 +144,12 @@ The TL-SG3210 copies the chosen source ports to **one** of its own ports (8).
    ones need it, unmanaged ones have none.
 2. Connect one of its ports to a free port on the TL-SG3210, say port 7
    (the uplink).
-3. To see its devices' traffic, mirror **port 7** on the TL-SG3210: that
-   shows everything between that switch's devices and the rest of the lab.
-   Traffic between two devices on the new switch never crosses port 7; to
-   see it, put those test machines on the TL-SG3210, or give the IDS a
-   second capture port on the new switch (its own mirror destination).
+3. Port 7 is already mirrored (ingress), so the IDS sees everything
+   between that switch's devices and the rest of the lab. Traffic between
+   two devices on the new switch never reaches the TL-SG3210, so the IDS
+   doesn't see it; to see it, put those test machines on the TL-SG3210, or
+   give the IDS a second capture port on the new switch (its own mirror
+   destination). The same holds for every further switch chained behind it.
 4. Add it to the tables above.
 
 ### Another router
@@ -159,8 +168,8 @@ the IDS sees each device's own address. On any brand:
    the laptop back to DHCP.
 5. Connect one of its **LAN** ports to a free switch port. Leave its
    **WAN/Internet** port empty.
-6. Mirror that switch port if its devices are to be watched (and mind the
-   one-mirrored-port rule above). Save the switch's configuration.
+6. Ports 1-7 are already mirrored (ingress), so its devices' traffic to
+   the rest of the lab is seen.
 7. Add it to the tables above.
 
 Traffic between devices on the same added router stays inside it, as with
