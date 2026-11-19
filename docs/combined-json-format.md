@@ -134,16 +134,20 @@ is not grouped by connection; `flows` is a lookup, like `rules`.
 
 A Snort and a Suricata alert are on the same packet when:
 
-- their times are at most 100 µs apart (on live traffic each engine stamps the
-  packet itself, 0–50 µs apart),
 - they name the same packet source and destination (addresses, and ports or
-  ICMP type and code when both engines report them), and
+  ICMP type and code when both engines report them),
 - the IP ID, TCP sequence and acknowledgement numbers, and ICMP identifier and
-  sequence agree wherever both engines give them. Snort writes these values in
-  its alert; Suricata's are read from the raw packet it writes in eve's alert
-  `packet` (turned on 2 Nov 2026 at 11:48; earlier alerts have none;
-  `deploy/apply-suricata-settings.sh` turns it on since 17 Nov 2026). The raw
-  packet is part of Suricata's `ids_output` (10.0).
+  sequence agree wherever both engines give them, and
+- their times are at most 1 ms apart when one of those values (not 0)
+  agrees, and at most 100 µs apart when none does (on live traffic each
+  engine stamps the packet itself, mostly 0–100 µs apart; since 19 Nov 2026,
+  with the whole lab switch mirrored, some alerts on the same packet land up
+  to 1 ms apart).
+
+Snort writes the header values in its alert; Suricata's are read from the raw
+packet it writes in eve's alert `packet` (turned on 2 Nov 2026 at 11:48;
+earlier alerts have none; `deploy/apply-suricata-settings.sh` turns it on
+since 17 Nov 2026). The raw packet is part of Suricata's `ids_output` (10.0).
 
 `matched_by` says `headers` when such header values were compared, and
 `time_and_addresses` when the engines gave none in common: Snort alerts on a

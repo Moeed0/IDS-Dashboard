@@ -7,11 +7,11 @@ engine alerted on carries only that engine's part. A packet both engines
 alerted on is one entry with both parts, so what the packet is (time,
 protocol, addresses, ports) is written once.
 
-A Snort and a Suricata alert are on the same packet when they are at most
-100 µs apart, name the same packet source and destination, and give the same
-IP ID and TCP or ICMP sequence numbers wherever both engines give them (Snort
-writes them; Suricata's are read from the raw packet in eve's alert
-``packet``). Each packet pairs with at most one packet of the other engine,
+A Snort and a Suricata alert are on the same packet when they name the same
+packet source and destination, give the same IP ID and TCP or ICMP sequence
+numbers wherever both engines give them (Snort writes them; Suricata's are
+read from the raw packet in eve's alert ``packet``), and are at most 1 ms
+apart when such a value (not 0) agrees, 100 µs when none does. Each packet pairs with at most one packet of the other engine,
 the closest in time first. Alerts without IP addresses are never combined.
 
 Every alert's IDS output is kept, split so nothing is written twice: fields
@@ -103,8 +103,14 @@ _PROTOCOL_NAMES = {
 }
 _ENGINE_ORDER = {"snort": 0, "suricata": 1}
 # On live traffic each engine stamps a packet itself: alerts on the same packet
-# land 0-50 µs apart, while different packets are rarely this close.
+# land 0-100 µs apart, while different packets are rarely this close.
 _SAME_PACKET_TOLERANCE_US = 100
+# When an IP ID or TCP or ICMP sequence number (not 0) both engines give
+# agrees, the packet is named by it, and the engines' stamps may be further
+# apart: with the whole lab switch mirrored (19 Nov 2026) about 400 alerts an
+# hour on the same packet landed 100 µs to 1 ms apart. dashboard_data reads
+# the alerts within 1 ms of each, so this is the most it can be.
+_SAME_PACKET_ID_TOLERANCE_US = 1000
 
 # Sentences that hold for any alert, or for every rule of a kind; they say
 # nothing about the alert at hand.
@@ -669,9 +675,10 @@ def _shared_header(snort: _Match, suricata: _Match) -> list[str]:
 
 
 def _same_packet(snort: _Match, suricata: _Match) -> bool:
-    """Alerts on one packet: at most _SAME_PACKET_TOLERANCE_US apart, with the
-    same packet source and destination, and the same IP ID and TCP or ICMP
-    sequence numbers wherever both engines give them. Alerts without IP
+    """Alerts on one packet: the same packet source and destination, the
+    same IP ID and TCP or ICMP sequence numbers wherever both engines give
+    them, and at most _SAME_PACKET_ID_TOLERANCE_US apart when one of those
+    (not 0) agrees, _SAME_PACKET_TOLERANCE_US when none does. Alerts without IP
     addresses are never on the same packet: nothing ties one engine's to the
     other's (Snort's ARP checks and Suricata's unknown-Ethertype events see
     different frames). The engines' direction labels are not compared: each
@@ -679,9 +686,12 @@ def _same_packet(snort: _Match, suricata: _Match) -> bool:
     for ICMP they disagree."""
     if not (snort.packet and suricata.packet):
         return False
-    if abs(snort.time_us - suricata.time_us) > _SAME_PACKET_TOLERANCE_US:
+    shared = _shared_header(snort, suricata)
+    if any(snort.header[name] != suricata.header[name] for name in shared):
         return False
-    if any(snort.header[name] != suricata.header[name] for name in _shared_header(snort, suricata)):
+    named = any(snort.header[name] for name in shared)
+    tolerance = _SAME_PACKET_ID_TOLERANCE_US if named else _SAME_PACKET_TOLERANCE_US
+    if abs(snort.time_us - suricata.time_us) > tolerance:
         return False
     return _same_endpoints(snort, suricata)
 
@@ -721,8 +731,8 @@ def _packets(matches: list[_Match]) -> list[_Packet]:
     suricata_times = [alerts[0].time_us for alerts in suricata_packets]
     pairs = []
     for i, left in enumerate(snort_packets):
-        j = bisect.bisect_left(suricata_times, left[0].time_us - _SAME_PACKET_TOLERANCE_US)
-        while j < len(suricata_times) and suricata_times[j] <= left[0].time_us + _SAME_PACKET_TOLERANCE_US:
+        j = bisect.bisect_left(suricata_times, left[0].time_us - _SAME_PACKET_ID_TOLERANCE_US)
+        while j < len(suricata_times) and suricata_times[j] <= left[0].time_us + _SAME_PACKET_ID_TOLERANCE_US:
             if _same_packet(left[0], suricata_packets[j][0]):
                 pairs.append((abs(left[0].time_us - suricata_times[j]), i, j))
             j += 1

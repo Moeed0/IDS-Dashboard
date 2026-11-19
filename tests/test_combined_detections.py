@@ -524,6 +524,39 @@ def test_header_values_confirm_the_same_packet():
     assert suricata["packet_info"] == {"linktype": 1}
 
 
+def test_matching_header_values_allow_stamps_up_to_a_millisecond_apart():
+    # Seen live with the whole lab switch mirrored: the same packet (same
+    # IP ID and sequence numbers) stamped 400 µs apart by the two engines.
+    document = _build([
+        _snort_row(_raw_snort()),
+        _suricata_row(_suricata_with_packet(
+            _ethernet_tcp_packet(4242, 1000, 2000), clock="15:54:02.662221",
+        )),
+    ])
+
+    packet, = document["packets"]
+    assert packet["matched_by"] == "headers"
+
+
+def test_matching_header_values_more_than_a_millisecond_apart_are_different_packets():
+    document = _build([
+        _snort_row(_raw_snort()),
+        _suricata_row(_suricata_with_packet(
+            _ethernet_tcp_packet(4242, 1000, 2000), clock="15:54:02.662900",
+        )),
+    ])
+
+    assert len(document["packets"]) == 2
+
+
+def test_without_header_values_stamps_over_100_microseconds_apart_are_different_packets():
+    suricata = _suricata_native(timestamp="2026-10-15T15:54:02.662221+0500")
+
+    document = _build([_snort_row(), _suricata_row(suricata)])
+
+    assert len(document["packets"]) == 2
+
+
 def test_different_header_values_are_different_packets_even_when_close_in_time():
     # 3 µs apart with the same addresses, but another IP ID and sequence
     # number: the next packet of the burst.
