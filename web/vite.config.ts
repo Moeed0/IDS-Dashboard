@@ -9,7 +9,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: Object.fromEntries(
-      ["/health", "/options", "/overview", "/alerts", "/export"].map((path) => [path, api]),
+      ["/health", "/options", "/overview", "/live", "/alerts", "/rule", "/status", "/archive", "/export", "/intel"]
+        .map((path) => [path, api]),
     ),
   },
 });

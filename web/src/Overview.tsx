@@ -21,28 +21,12 @@ import { dayTime, duration, minuteLabel } from "./time";
 // The engines store alerts several times a minute on the lab network, so
 // this long without one is worth a warning.
 const QUIET_MS = 30 * 60 * 1000;
-// The chart's height for a 960-wide drawing.
-const CHART_HEIGHT = { small: 150, tall: 320 };
+// The chart's height for a 960-wide drawing: the same whatever the counts,
+// so the page below it doesn't move when a burst comes and goes.
+const CHART_HEIGHT = 176;
 // The live chart is fetched this often, and moves with the clock in between.
 const LIVE_REFRESH_MS = 5_000;
 const LIVE_TICK_MS = 2 * 60 * 1000;
-
-/**
- * Small while each engine's alerts keep near their usual level, and taller
- * as a burst rises above it, so that the usual level does not flatten into
- * the bottom of the chart: from twice the usual (median) count to six times.
- */
-function chartHeight(lines: number[][]): number {
-  const rise = Math.max(
-    1,
-    ...lines.map((values) => {
-      const counted = values.filter((value) => value > 0).sort((a, b) => a - b);
-      return counted.length ? counted[counted.length - 1] / counted[Math.floor(counted.length / 2)] : 1;
-    }),
-  );
-  const grow = Math.min(1, Math.max(0, (rise - 2) / 4));
-  return Math.round(CHART_HEIGHT.small + grow * (CHART_HEIGHT.tall - CHART_HEIGHT.small));
-}
 
 /** One line per engine, in its colour. */
 function engineLines(alerts: Partial<Record<Engine, number[]>>) {
@@ -72,7 +56,7 @@ function LiveSection({ choice, onUnauthorized }: { choice: ReactNode; onUnauthor
           tickEveryMs={LIVE_TICK_MS}
           tickLabel={minuteLabel}
           off={data.off}
-          height={chartHeight(byEngine(data.alerts).map(([, values]) => values))}
+          height={CHART_HEIGHT}
           yLabel={`Alerts per ${data.step_ms / 1000} seconds`}
           series={engineLines(data.alerts)}
         />
@@ -304,7 +288,7 @@ export function Overview({
             <LineChart
               startMs={day.start_ms}
               stepMs={day.step_ms}
-              height={chartHeight(byEngine(day.alerts).map(([, values]) => values))}
+              height={CHART_HEIGHT}
               yLabel={`Alerts per ${day.step_ms / 60_000} minutes`}
               series={engineLines(day.alerts)}
               off={day.off}

@@ -778,6 +778,30 @@ def _import_builtin_docs(connection: sqlite3.Connection, path: Path | None) -> i
     return len(rows)
 
 
+COPY_CHUNK = 64 << 20
+
+
+def _copy_uncached(source: Path, target: Path) -> None:
+    """source copied to target, 64 MB at a time, each piece written out and
+    then dropped from the page cache. The database is 1.4 GB: copied whole
+    through the cache (shutil.copyfile) it pushed this VM, with about 1 GB
+    free, into swapping to compressed RAM, and the copy took 20 minutes."""
+    with source.open("rb") as reading, target.open("wb") as writing:
+        done = 0
+        while True:
+            chunk = reading.read(COPY_CHUNK)
+            if not chunk:
+                break
+            writing.write(chunk)
+            writing.flush()
+            os.fdatasync(writing.fileno())
+            if hasattr(os, "posix_fadvise"):
+                os.posix_fadvise(reading.fileno(), done, len(chunk), os.POSIX_FADV_DONTNEED)
+                os.posix_fadvise(writing.fileno(), done, len(chunk), os.POSIX_FADV_DONTNEED)
+            done += len(chunk)
+    shutil.copymode(source, target)
+
+
 def add_rule_docs(
     database: str | Path = DEFAULT_DB_PATH,
     rule_docs_path: str | Path | None = DEFAULT_RULE_DOCS_PATH,
@@ -801,8 +825,7 @@ def add_rule_docs(
     os.close(descriptor)
     temporary = Path(temporary_name)
     try:
-        shutil.copyfile(target, temporary)
-        shutil.copymode(target, temporary)
+        _copy_uncached(target, temporary)
         connection = sqlite3.connect(temporary)
         try:
             counts = {
