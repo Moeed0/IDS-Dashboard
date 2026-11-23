@@ -6,12 +6,12 @@ it, for the LLM to read from there.
 Copy this one file to the LLM PC (Windows or Linux; Python 3.8 or newer, no
 packages) and run it there:
 
-    python llm_receiver.py                      # port 8000, into ./received
-    python llm_receiver.py --port 8000 --folder D:\\ids-received --token SECRET
+    python llm_receiver.py                      # port 8501, into ./received
+    python llm_receiver.py --port 8501 --folder D:\\ids-received --token SECRET
 
 Then, on the IDS machine, in .env (and restart the dashboard):
 
-    IDS_LLM_URL=http://<the LLM PC's address>:8000/
+    IDS_LLM_URL=http://<the LLM PC's address>:8501/
     IDS_LLM_TOKEN=SECRET        # only with --token
 
 Windows asks once whether Python may accept connections: allow it on the
@@ -135,7 +135,7 @@ def make_handler(folder: Path, token: str | None):
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--host", default="0.0.0.0", help="address to listen on (default: all)")
-    parser.add_argument("--port", type=int, default=8000, help="port (default: 8000)")
+    parser.add_argument("--port", type=int, default=8501, help="port (default: 8501)")
     parser.add_argument("--folder", default="received", help="where files go (default: ./received)")
     parser.add_argument(
         "--token", default=os.environ.get("IDS_LLM_TOKEN") or None,
