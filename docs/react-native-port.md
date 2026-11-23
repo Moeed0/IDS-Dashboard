@@ -132,7 +132,7 @@ Until 5 November 2026 the rule counts and the engines' files were in
                  {"label": "All stored", "ms": null}],
  "page_sizes": [10, 25, 50, 100, 250],
  "last_choices": [5, 10, 20], "max_last": 150000,
- "send_to": "192.168.50.20:8501",
+ "send_to": "192.168.50.20:8601",
  "chart_steps": [5, 10, 15], "default_chart_step": 15,
  "live_step_seconds": 30,
  "default_top_rules_length": "1 day",
@@ -554,7 +554,7 @@ in the combined layout the newest 20 of both together.
    to the LLM PC: to `IDS_LLM_URL` in .env (`http://` or `https://`), with
    `Content-Type: application/json`, `X-Filename`, the `X-…` counts, and
    `Authorization: Bearer <IDS_LLM_TOKEN>` when that is set. It answers
-   `{"sent": true, "to": "192.168.50.20:8501", "filename": …, "bytes": …,
+   `{"sent": true, "to": "192.168.50.20:8601", "filename": …, "bytes": …,
    "alerts": …, "packets": …, "both_engine_packets": …}`; 503 while
    `IDS_LLM_URL` is empty (`send_to` in `/options` is then `null` and the
    button is off), and 502 when the LLM PC can't be reached or answers
