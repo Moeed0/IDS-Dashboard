@@ -15,12 +15,13 @@ import os
 import shutil
 import re
 import sqlite3
+import subprocess
 import tempfile
 import zipfile
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from ids.offline_intelligence import DEFAULT_DB_PATH, SCHEMA_SQL
 
@@ -68,6 +69,60 @@ CREATE TABLE talos_rule_docs (
 );
 """
 
+
+# Suricata's rules (Emerging Threats Open, Suricata's own, this lab's local
+# ones) and what their classtypes mean: the rules' own documentation, since
+# ET Open has no pages like Talos's.
+DEFAULT_SURICATA_RULES_PATHS = (
+    Path("/var/lib/suricata/rules/suricata.rules"),
+    Path("/etc/suricata/rules/local.rules"),
+)
+DEFAULT_CLASSIFICATION_PATH = Path("/var/lib/suricata/rules/classification.config")
+SURICATA_RULE_DOCS_SQL = """
+DROP TABLE IF EXISTS suricata_rule_docs;
+CREATE TABLE suricata_rule_docs (
+    gid INTEGER NOT NULL,
+    sid INTEGER NOT NULL,
+    rev INTEGER,
+    msg TEXT,
+    ruleset TEXT,
+    category TEXT,
+    classtype TEXT,
+    class_description TEXT,
+    priority INTEGER,
+    protocol TEXT,
+    confidence TEXT,
+    signature_severity TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    cve_ids TEXT,
+    mitre_tactic_id TEXT,
+    mitre_technique_id TEXT,
+    references_json TEXT,
+    metadata_json TEXT,
+    rule_text TEXT,
+    PRIMARY KEY (gid, sid)
+);
+"""
+# Snort's built-in rules (GID 2 and up, no rule text): the module that raises
+# each and what Snort says that module is, from the snort binary itself.
+DEFAULT_SNORT = "snort"
+BUILTIN_RULES_SQL = """
+DROP TABLE IF EXISTS snort_builtin_rules;
+CREATE TABLE snort_builtin_rules (
+    gid INTEGER NOT NULL,
+    sid INTEGER NOT NULL,
+    msg TEXT,
+    module TEXT,
+    module_type TEXT,
+    module_help TEXT,
+    PRIMARY KEY (gid, sid)
+);
+"""
+_RULE_START_RE = re.compile(r"^(alert|drop|reject|pass)\s", re.IGNORECASE)
+_RULE_OPTION_RE = re.compile(r'\s*([A-Za-z_][\w.-]*)\s*(?::\s*((?:"(?:[^"\\]|\\.)*"|[^;])*))?;')
+_ANY_CVE_RE = re.compile(r"CVE[-_](\d{4})[-_](\d{4,7})", re.IGNORECASE)
+_BUILTIN_LINE_RE = re.compile(r"^(\d+):(\d+) \(([^)]+)\) (.*)$")
 
 CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 TECHNIQUE_RE = re.compile(r"^T\d{4}(?:\.\d{3})?$", re.IGNORECASE)
@@ -778,6 +833,175 @@ def _import_builtin_docs(connection: sqlite3.Connection, path: Path | None) -> i
     return len(rows)
 
 
+def _classifications(path: Path | None) -> dict[str, tuple[str, int | None]]:
+    """classification.config: each classtype's description and priority."""
+    classes: dict[str, tuple[str, int | None]] = {}
+    if path is None or not path.is_file():
+        return classes
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        name, _, rest = line.strip().partition("config classification:")
+        if name or not rest:
+            continue
+        parts = [part.strip() for part in rest.split(",")]
+        if len(parts) >= 2:
+            classes[parts[0]] = (parts[1], _number(parts[2]) if len(parts) > 2 else None)
+    return classes
+
+
+def _ruleset(path: Path, msg: str) -> tuple[str, str]:
+    """Where a Suricata rule comes from, and its category (the message's
+    leading words: ET MALWARE, GPL MISC, SURICATA)."""
+    words = msg.split()
+    if path.name == "local.rules":
+        return "Local rule of this lab", words[0] if words else ""
+    if words[:1] == ["ET"]:
+        return "Emerging Threats Open", " ".join(words[:2])
+    if words[:1] == ["GPL"]:
+        return "Emerging Threats Open (GPL rules, from the old Snort ruleset)", " ".join(words[:2])
+    return "Suricata's own rules (decoder, stream, protocol and file events)", words[0] if words else ""
+
+
+def _suricata_rule_row(
+    text: str, path: Path, classes: dict[str, tuple[str, int | None]],
+) -> tuple[Any, ...] | None:
+    start, end = text.find("("), text.rfind(")")
+    if start < 0 or end <= start:
+        return None
+    options: dict[str, list[str]] = {}
+    for match in _RULE_OPTION_RE.finditer(text[start + 1:end]):
+        value = str(match.group(2) or "").strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = re.sub(r"\\(.)", r"\1", value[1:-1])
+        options.setdefault(match.group(1).lower(), []).append(value)
+    sid = _number((options.get("sid") or [""])[0])
+    if sid is None:
+        return None
+    metadata: dict[str, list[str]] = {}
+    for entry in options.get("metadata", []):
+        for item in entry.split(","):
+            key, _, value = item.strip().partition(" ")
+            if key and value.strip() and value.strip() not in metadata.setdefault(key, []):
+                metadata[key].append(value.strip())
+    references = options.get("reference", [])
+    cves = {
+        f"CVE-{year}-{number}"
+        for year, number in _ANY_CVE_RE.findall(" ".join(metadata.get("cve", [])))
+    } | {
+        f"CVE-{value[4:].strip()}" for value in references if value.lower().startswith("cve,")
+    }
+
+    def first(key: str) -> str | None:
+        return (metadata.get(key) or [None])[0]
+
+    def date(key: str) -> str | None:
+        value = first(key)
+        return value.replace("_", "-") if value else None
+
+    msg = (options.get("msg") or [""])[0]
+    ruleset, category = _ruleset(path, msg)
+    classtype = (options.get("classtype") or [None])[0]
+    description, class_priority = classes.get(classtype or "", (None, None))
+    priority = _number((options.get("priority") or [""])[0]) or class_priority
+    header = text[:start].split()
+    return (
+        _number((options.get("gid") or ["1"])[0]) or 1,
+        sid,
+        _number((options.get("rev") or [""])[0]),
+        msg,
+        ruleset,
+        category,
+        classtype,
+        description,
+        priority,
+        header[1] if len(header) > 1 else None,
+        first("confidence"),
+        first("signature_severity"),
+        date("created_at"),
+        date("updated_at"),
+        ", ".join(sorted(cves)),
+        ", ".join(metadata.get("mitre_tactic_id", [])),
+        ", ".join(metadata.get("mitre_technique_id", [])),
+        json.dumps(references, ensure_ascii=False),
+        json.dumps(metadata, ensure_ascii=False),
+        text,
+    )
+
+
+def _import_suricata_rule_docs(
+    connection: sqlite3.Connection, paths: Iterable[Path | None], classification: Path | None,
+) -> int:
+    """Each loaded Suricata rule's own documentation, in suricata_rule_docs:
+    its message, ruleset and category, what its classtype means, its
+    confidence, severity and dates, its references, CVEs and ATT&CK IDs, and
+    its text. Rules commented out in the files are left out."""
+    files = [path for path in paths if path is not None and path.is_file()]
+    if not files:
+        return 0
+    connection.executescript(SURICATA_RULE_DOCS_SQL)
+    classes = _classifications(classification)
+    rows = []
+    for path in files:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if _RULE_START_RE.match(line):
+                row = _suricata_rule_row(line, path, classes)
+                if row is not None:
+                    rows.append(row)
+    connection.executemany(
+        f"INSERT OR REPLACE INTO suricata_rule_docs VALUES ({', '.join('?' * 20)})", rows,
+    )
+    count = connection.execute("SELECT COUNT(*) FROM suricata_rule_docs").fetchone()[0]
+    used = files + ([classification] if classification is not None and classification.is_file() else [])
+    as_of = max(datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc) for path in files)
+    _write_source_metadata(connection, "suricata_rule_docs", as_of.date().isoformat(), None, count, used)
+    return count
+
+
+def _import_builtin_rules(connection: sqlite3.Connection, snort: str | None) -> int:
+    """Snort's built-in rules from the snort binary (--list-builtin): each
+    rule's module and message, and what Snort says the module is
+    (--help-modules-json). None when snort isn't installed here."""
+    binary = shutil.which(snort) if snort else None
+    if binary is None:
+        return 0
+    try:
+        listed = subprocess.run(
+            [binary, "--list-builtin"], capture_output=True, text=True, timeout=60, check=True,
+        ).stdout
+        modules = {
+            module["module"]: module
+            for module in json.loads(subprocess.run(
+                [binary, "--help-modules-json"], capture_output=True, text=True, timeout=60, check=True,
+            ).stdout)
+        }
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+    rows = []
+    for line in listed.splitlines():
+        match = _BUILTIN_LINE_RE.match(line.strip())
+        if match:
+            module = modules.get(match.group(3), {})
+            rows.append((
+                int(match.group(1)), int(match.group(2)), match.group(4).strip(), match.group(3),
+                module.get("type"), module.get("help"),
+            ))
+    if not rows:
+        return 0
+    connection.executescript(BUILTIN_RULES_SQL)
+    connection.executemany("INSERT OR REPLACE INTO snort_builtin_rules VALUES (?, ?, ?, ?, ?, ?)", rows)
+    try:
+        answer = subprocess.run([binary, "-V"], capture_output=True, text=True, timeout=60)
+        version = answer.stdout + answer.stderr
+    except (OSError, subprocess.SubprocessError):
+        version = ""
+    found = re.search(r"Version ([\d.]+)", version)
+    _write_source_metadata(
+        connection, "snort_builtin_rules", datetime.now(timezone.utc).date().isoformat(),
+        found.group(1) if found else None, len(rows), [],
+    )
+    return len(rows)
+
+
 COPY_CHUNK = 64 << 20
 
 
@@ -807,11 +1031,14 @@ def add_rule_docs(
     rule_docs_path: str | Path | None = DEFAULT_RULE_DOCS_PATH,
     talos_pages_path: str | Path | None = DEFAULT_TALOS_PAGES_PATH,
     builtin_stubs_path: str | Path | None = DEFAULT_BUILTIN_STUBS_PATH,
+    suricata_rules_paths: Iterable[str | Path] | None = DEFAULT_SURICATA_RULES_PATHS,
+    classification_path: str | Path | None = DEFAULT_CLASSIFICATION_PATH,
+    snort: str | None = DEFAULT_SNORT,
 ) -> dict[str, Any]:
-    """The Snort rule documentation (Talos's, and Snort's own for its
-    built-in rules) put in an existing database, replacing what it had of
-    it: on a copy, which then replaces the database whole, so a reader or
-    download in progress keeps the old one."""
+    """The rule documentation (Talos's for Snort's rules, Snort's own for its
+    built-in rules, and Suricata's rules' own) put in an existing database,
+    replacing what it had of it: on a copy, which then replaces the database
+    whole, so a reader or download in progress keeps the old one."""
     target = Path(database).expanduser().resolve()
     if not target.is_file():
         raise FileNotFoundError(f"Database does not exist: {target}")
@@ -833,6 +1060,11 @@ def add_rule_docs(
                     connection, resolved(rule_docs_path), resolved(talos_pages_path)
                 ),
                 "snort_builtin_docs": _import_builtin_docs(connection, resolved(builtin_stubs_path)),
+                "snort_builtin_rules": _import_builtin_rules(connection, snort),
+                "suricata_rule_docs": _import_suricata_rule_docs(
+                    connection, [resolved(path) for path in suricata_rules_paths or ()],
+                    resolved(classification_path),
+                ),
             }
             connection.commit()
             check = connection.execute("PRAGMA quick_check").fetchone()[0]
@@ -858,6 +1090,9 @@ def import_sources(
     rule_docs_path: str | Path | None = DEFAULT_RULE_DOCS_PATH,
     talos_pages_path: str | Path | None = DEFAULT_TALOS_PAGES_PATH,
     builtin_stubs_path: str | Path | None = DEFAULT_BUILTIN_STUBS_PATH,
+    suricata_rules_paths: Iterable[str | Path] | None = DEFAULT_SURICATA_RULES_PATHS,
+    classification_path: str | Path | None = DEFAULT_CLASSIFICATION_PATH,
+    snort: str | None = DEFAULT_SNORT,
 ) -> dict[str, Any]:
     """Build a validated database from local files and atomically publish it."""
     target = Path(output_path).expanduser().resolve()
@@ -934,6 +1169,12 @@ def import_sources(
                 connection,
                 Path(builtin_stubs_path).expanduser().resolve() if builtin_stubs_path else None,
             )
+            counts["snort_builtin_rules"] = _import_builtin_rules(connection, snort)
+            counts["suricata_rule_docs"] = _import_suricata_rule_docs(
+                connection,
+                [Path(path).expanduser().resolve() for path in suricata_rules_paths or ()],
+                Path(classification_path).expanduser().resolve() if classification_path else None,
+            )
 
             connection.commit()
 
@@ -970,9 +1211,9 @@ def main() -> None:
         "--add-rule-docs",
         action="store_true",
         help=(
-            "Only put the Snort rule documentation (--rule-docs, --talos-pages, "
-            "--builtin-stubs) in the existing database at --output; the other "
-            "sources are kept."
+            "Only put the rule documentation (--rule-docs, --talos-pages, "
+            "--builtin-stubs, --snort, --suricata-rules, --classification) in the "
+            "existing database at --output; the other sources are kept."
         ),
     )
     parser.add_argument(
@@ -989,6 +1230,24 @@ def main() -> None:
         "--builtin-stubs",
         default=str(DEFAULT_BUILTIN_STUBS_PATH),
         help=f"Snort's descriptions of its built-in rules (default: {DEFAULT_BUILTIN_STUBS_PATH}).",
+    )
+    parser.add_argument(
+        "--suricata-rules",
+        action="append",
+        help=(
+            "A Suricata rules file whose rules are documented (repeatable; default: "
+            + ", ".join(str(path) for path in DEFAULT_SURICATA_RULES_PATHS) + ")."
+        ),
+    )
+    parser.add_argument(
+        "--classification",
+        default=str(DEFAULT_CLASSIFICATION_PATH),
+        help=f"Suricata's classtypes (default: {DEFAULT_CLASSIFICATION_PATH}).",
+    )
+    parser.add_argument(
+        "--snort",
+        default=DEFAULT_SNORT,
+        help="The snort binary that lists its built-in rules and modules (default: snort on the PATH).",
     )
     parser.add_argument(
         "--nvd-path",
@@ -1017,6 +1276,7 @@ def main() -> None:
     if args.add_rule_docs:
         print(json.dumps(add_rule_docs(
             args.output, args.rule_docs, args.talos_pages, args.builtin_stubs,
+            args.suricata_rules or DEFAULT_SURICATA_RULES_PATHS, args.classification, args.snort,
         ), indent=2))
         return
     missing = [
@@ -1037,6 +1297,9 @@ def main() -> None:
         rule_docs_path=args.rule_docs,
         talos_pages_path=args.talos_pages,
         builtin_stubs_path=args.builtin_stubs,
+        suricata_rules_paths=args.suricata_rules or DEFAULT_SURICATA_RULES_PATHS,
+        classification_path=args.classification,
+        snort=args.snort,
     )
     print(json.dumps(result, indent=2))
 
