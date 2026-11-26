@@ -297,6 +297,34 @@ alert_json =
     file = true,
     fields = 'timestamp pkt_num proto pkt_gen pkt_len dir src_addr src_port dst_addr dst_port iface msg rule gid sid rev action class priority service app_id icmp_type icmp_code icmp_id icmp_seq tcp_flags tcp_seq tcp_ack tcp_win udp_len ip_id ip_len ttl tos eth_src eth_dst eth_type vlan flowstart_time server_pkts server_bytes client_pkts client_bytes b64_data'
 }
+
+-- Snort's own record of each TLS connection (its extractor, 26 Nov 2026):
+-- the site the client asked for (SNI), the TLS version, cipher and curve,
+-- and the certificate's subject and issuer (TLS 1.2: TLS 1.3 encrypts the
+-- certificate). One JSON line per connection in
+-- /var/log/snort/file_connector_tls_transmit, which the collector stores
+-- so that the dashboard checks each alert's site against Suricata's
+-- (src/ids/snort_tls.py). Snort truncates the file when it starts. No QUIC:
+-- this Snort has no QUIC inspector, so QUIC is Suricata's alone.
+file_connector =
+{
+    { connector = 'tls_log', name = 'tls', direction = 'transmit', text_format = true },
+}
+extractor =
+{
+    formatting = 'json',
+    connector = 'tls_log',
+    time = 'unix_us',
+    protocols =
+    {
+        {
+            service = 'ssl',
+            on_events = 'tls_metadata_event',
+            fields = 'ts, id.orig_h, id.orig_p, id.resp_h, id.resp_p, version, server_name, subject, issuer, cipher, curve',
+        },
+    }
+}
+
 --alert_fast = { }
 --alert_full = { }
 --alert_sfsocket = { }

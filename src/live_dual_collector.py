@@ -15,6 +15,9 @@ from ids.db import (
 )
 from ids.live_normalizer import normalize_live_event
 from ids.schema import ensure_schema
+from ids.snort_tls import connection as snort_connection
+from ids.snort_tls import prune as prune_snort_tls
+from ids.snort_tls import record_connections
 from ids.tailer import PersistentJsonTailer
 from ids.tls_fingerprints import handshake, record_handshakes
 
@@ -36,6 +39,8 @@ class PendingBatch:
     rows: list[dict] = field(default_factory=list)
     # Suricata's TLS and QUIC handshakes' fingerprints (ids/tls_fingerprints.py).
     handshakes: list[dict] = field(default_factory=list)
+    # Snort's extractor lines: its record of each TLS connection (ids/snort_tls.py).
+    snort_tls: list[dict] = field(default_factory=list)
     latest_positions: dict[str, tuple[int, int]] = field(
         default_factory=dict
     )
@@ -63,12 +68,25 @@ def log_files(settings: Settings) -> dict[str, Path]:
     return {engine: files[engine] for engine in settings.engines}
 
 
+# The source name of Snort's extractor log, beside the engines' alert logs.
+SNORT_TLS = "snort_tls"
+
+
+def sources(settings: Settings) -> dict[str, Path]:
+    """Every log the collector reads: each engine's alerts, and Snort's
+    record of each TLS connection when this machine runs Snort."""
+    files = log_files(settings)
+    if "snort" in files:
+        files[SNORT_TLS] = settings.snort_tls_file
+    return files
+
+
 def build_tailers(
     settings: Settings,
     *,
     start_at_end: bool = True,
 ) -> dict[str, PersistentJsonTailer]:
-    """One tailer per engine log, each saving its place in the state file."""
+    """One tailer per log, each saving its place in the state file."""
     return {
         engine: PersistentJsonTailer(
             path,
@@ -76,7 +94,7 @@ def build_tailers(
             engine,
             start_at_end=start_at_end,
         )
-        for engine, path in log_files(settings).items()
+        for engine, path in sources(settings).items()
     }
 
 
@@ -109,12 +127,15 @@ def flush_pending(
         return written
 
     # First write alerts. If this fails, no source position is acknowledged.
-    if pending.rows or pending.handshakes:
+    if pending.rows or pending.handshakes or pending.snort_tls:
         conn = connect_database(settings.db_file)
 
         try:
             if pending.handshakes:
                 record_handshakes(conn, pending.handshakes)
+
+            if pending.snort_tls:
+                record_connections(conn, pending.snort_tls)
 
             insert_alert_batch(
                 conn,
@@ -140,6 +161,7 @@ def flush_pending(
     written.update(row.get("engine") for row in pending.rows)
     pending.rows.clear()
     pending.handshakes.clear()
+    pending.snort_tls.clear()
     pending.latest_positions.clear()
     pending.processed_lines = 0
     return written
@@ -211,6 +233,8 @@ def run_periodic_retention(
                 settings.alert_retention,
             )
 
+        # Snort's TLS connections from before the oldest alert's.
+        prune_snort_tls(conn)
         conn.commit()
 
     # A full disk, say: the alerts stay in the database, past its limit,
@@ -272,6 +296,18 @@ def handle_line(
         )
         return
 
+    # Snort's extractor log has no alerts: each line is a TLS connection.
+    if engine == SNORT_TLS:
+        found = snort_connection(event)
+        if found is not None:
+            pending.snort_tls.append(found)
+        pending.record_position(
+            engine,
+            inode,
+            offset,
+        )
+        return
+
     normalized = normalize_live_event(
         engine,
         event,
@@ -312,6 +348,8 @@ def run_collector(
 
     pending = PendingBatch()
     stored: Counter[str] = Counter()
+    # The logs said to be missing or unreadable, said once until they're back.
+    unread: set[str] = set()
 
     last_flush = time.monotonic()
     last_retention = time.monotonic()
@@ -321,7 +359,7 @@ def run_collector(
     print(
         f"Database:        {settings.db_file}"
     )
-    for engine, path in log_files(settings).items():
+    for engine, path in sources(settings).items():
         print(
             f"{engine.capitalize() + ':':<18}{path}"
         )
@@ -358,18 +396,23 @@ def run_collector(
 
                 try:
                     tailer.poll(callback)
+                    unread.discard(engine)
 
                 except FileNotFoundError:
-                    print(
-                        f"[!] {engine}: log file not found: "
-                        f"{tailer.path}"
-                    )
+                    if engine not in unread:
+                        print(
+                            f"[!] {engine}: log file not found: "
+                            f"{tailer.path}"
+                        )
+                    unread.add(engine)
 
                 except PermissionError:
-                    print(
-                        f"[!] {engine}: log file not readable: "
-                        f"{tailer.path}"
-                    )
+                    if engine not in unread:
+                        print(
+                            f"[!] {engine}: log file not readable: "
+                            f"{tailer.path}"
+                        )
+                    unread.add(engine)
 
             now = time.monotonic()
 
@@ -440,7 +483,7 @@ def main() -> None:
     print("=== Dual IDS Collector Startup ===")
     print(f"Database:        {settings.db_file}")
     print(f"State:            {settings.state_file}")
-    for engine, path in log_files(settings).items():
+    for engine, path in sources(settings).items():
         print(f"{engine.capitalize() + ':':<18}{path}")
     print()
 

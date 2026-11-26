@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ids.snort_tls import create_tables as create_snort_tls_tables
 from ids.tls_fingerprints import create_tables as create_fingerprint_tables
 from ids.uids import assign_uids
 
@@ -289,6 +290,8 @@ def ensure_schema(conn: sqlite3.Connection, uid_mark: Path | None = None) -> Non
     _create_tables(conn)
     # The TLS fingerprints each device has used (ids/tls_fingerprints.py).
     create_fingerprint_tables(conn)
+    # Snort's record of each TLS connection, from its extractor (ids/snort_tls.py).
+    create_snort_tls_tables(conn)
     had_app = "app" in _table_columns(conn, "alerts")
 
     _add_missing_columns(

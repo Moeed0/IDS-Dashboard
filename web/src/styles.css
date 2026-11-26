@@ -205,6 +205,11 @@ code {
   color: var(--muted);
 }
 
+/* Snort recorded another site than Suricata for the same connection. */
+.differs {
+  color: var(--error);
+}
+
 .error {
   color: var(--error);
 }

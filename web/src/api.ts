@@ -228,6 +228,18 @@ export interface AlertDetails {
     /** Named by the network that owns the server's address, when no
      * handshake reached it (iptoasn.com). */
     owner?: { name: string; asn: number; country: string | null; description: string };
+    /** Which engines named this site for this connection: Suricata from the
+     * alert's TLS details, Snort from its record of the connection
+     * (extractor). */
+    seen_by?: Engine[];
+    /** The site Snort recorded for this connection, when it differs from
+     * Suricata's, and its service. */
+    snort_site?: string;
+    snort_service?: string | null;
+    /** How the connection is encrypted (the cipher and curve are Snort's). */
+    encryption?: { version: string | null; cipher: string | null; curve: string | null };
+    /** The server's certificate (TLS 1.2: TLS 1.3 encrypts it). */
+    certificate?: { subject: string | null; issuer: string | null };
   } | null;
 }
 
@@ -236,6 +248,9 @@ export interface RawRecord {
   id: number;
   engine: Engine;
   uid?: string | null;
+  /** "snort_tls": Snort's record of the TLS connection (its extractor),
+   * not an alert. */
+  source?: string;
   record: unknown;
 }
 

@@ -110,7 +110,7 @@ Until 5 November 2026 the rule counts and the engines' files were in
 | `GET /overview?step_minutes=&top_rules_length=` | `overview(db_path, ids_sources, alert_retention=…, step_minutes=…, top_rules_length=…)` | Overview screen data |
 | `GET /status` | `status(db_path, state_file)` | Whether the IDS stores alerts now, for the status panel |
 | `GET /live` | `live(db_path)` | The Overview's live chart: the last 15 minutes in 30-second steps |
-| `GET /alerts?<filters>&page=&page_size=` | `alerts(db_path, filters=AlertFilter(…), …, intel_db=…)` | One page of alerts, newest first; a Suricata alert on a TLS or QUIC connection has `names`, its program and the service of its site in a few words, each name once ("Chromium Browser · Youtube"; the site when its service is unknown); any other alert (either engine) to or from an address a TLS handshake went to has the service of the sites seen there, ending in "?" ("Instagram?"), and failing that the owner of its first public address ("Zenlayer network?") |
+| `GET /alerts?<filters>&page=&page_size=` | `alerts(db_path, filters=AlertFilter(…), …, intel_db=…)` | One page of alerts, newest first; a Suricata alert on a TLS or QUIC connection has `names`, its program and the service of its site in a few words, each name once ("Chromium Browser · Youtube"; the site when its service is unknown); any other alert (either engine) on a TLS connection Snort's extractor recorded (`snort_tls`) has the service of that connection's site, for sure; any other to or from an address a TLS handshake went to has the service of the sites seen there, ending in "?" ("Instagram?"), and failing that the owner of its first public address ("Zenlayer network?") |
 | `GET /alerts/values` | `filter_values(db_path)` | The protocols, classes, services and apps the filters offer |
 | `GET /alerts/{id}` | `alert_detail(db_path, id)` | One alert, whole, for the side panel |
 | `GET /rule-pairs` | `rule_pairs(db_path)` | The last hour's rules both engines fired on one packet, for the Alert Explorer |
@@ -485,18 +485,30 @@ A row clicked (or Enter on it) opens a panel down the right side:
   its first public address, `owner` (`{name, asn, country, description}`,
   the network that owns it, from iptoasn.com) with `server` and
   `"by_address": true`; the panel shows it as "Network", and the list's
-  tag as "<owner> network?".
+  tag as "<owner> network?". Each alert is checked against Snort's record
+  of its TLS connection (`src/ids/snort_tls.py`): `seen_by` is
+  `["suricata", "snort"]` when both engines named the same site (the
+  panel adds "✓ both engines"), `["suricata"]` with `snort_site` and
+  `snort_service` when Snort recorded another (written under it in red),
+  and `["snort"]` when only Snort's record names it (an alert with no TLS
+  details of its own). `encryption` (`{version, cipher, curve}`, the
+  cipher and curve Snort's) and `certificate` (`{subject, issuer}`, TLS
+  1.2 only) are there when an engine gives them; the panel shows them as
+  "Encryption" and "Certificate". Snort's record itself is the last of
+  `raw`, with `"source": "snort_tls"`, `"id": -1` and no `uid`.
 - The panel shows the whole message, time, engine, rule (with a link that
   puts it in the Rule filter), class, protocol and service, the app, the
   connection's program ("from" its source; red when it is known malware)
   and its service with the site ("Site" alone when the service is unknown
-  or named like the program), both endpoints,
+  or named like the program), how the connection is encrypted and its
+  certificate, both endpoints,
   the alert's and the packet's IDs; the other alerts on the packet, each a
   link that opens it; the alert's rule (why it fired, its text, and the rest
   under its own headings); the CVEs and techniques; the packet's entry
   as JSON; and "Raw output": each record of `raw` as indented JSON (or one
-  line, with "one line" ticked), headed by its engine, "this alert" or its
-  UID, and the log it came from, with "copy" to copy it. Esc or ✕ closes
+  line, with "one line" ticked), headed by its engine, "this alert", its
+  UID or "the TLS connection" (Snort's record of it), and the log it came
+  from, with "copy" to copy it. Esc or ✕ closes
   it; the row it shows is outlined.
 - In the lists the headings stay in view while the page is scrolled, and a
   row that came in since the last answer lights up for a moment (page 1 of

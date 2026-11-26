@@ -40,6 +40,7 @@ export function ruleEntry(rules: AlertDetails["rules"], alert: AlertRow): Record
 const LOGS: Record<string, string> = {
   snort: "/var/log/snort/alert_json.txt",
   suricata: "/var/log/suricata/eve.json",
+  snort_tls: "/var/log/snort/file_connector_tls_transmit",
 };
 
 /** The records, one engine's after another's, as indented JSON or as the one
@@ -64,14 +65,21 @@ export function RawOutput({ records, current }: { records: RawRecord[]; current:
         </label>
       </div>
       <p className="muted">
-        Each alert on this packet as its engine wrote it, every field and value, with the keys in alphabetical order.
+        Each alert on this packet as its engine wrote it, and Snort&apos;s record of the TLS connection it was on, every
+        field and value, with the keys in alphabetical order.
       </p>
       {records.map((raw) => (
         <div key={raw.id} className="raw-record">
           <h4>
             {NAMES[raw.engine] ?? raw.engine}
-            {raw.id === current ? " · this alert" : raw.uid ? ` · ${raw.uid}` : ""}
-            <span className="muted"> · {LOGS[raw.engine] ?? ""}</span>
+            {raw.source === "snort_tls"
+              ? " · the TLS connection"
+              : raw.id === current
+                ? " · this alert"
+                : raw.uid
+                  ? ` · ${raw.uid}`
+                  : ""}
+            <span className="muted"> · {LOGS[raw.source ?? raw.engine] ?? ""}</span>
             <button type="button" className="link" onClick={() => copy(raw)}>
               {copied === raw.id ? "copied" : "copy"}
             </button>
@@ -177,6 +185,18 @@ export function AlertDetail({
                 ) : (
                   `${connection.site}${connection.by_address ? "?" : ""}`
                 )}
+                {connection.seen_by && connection.seen_by.length > 1 && (
+                  <span className="muted"> ✓ both engines</span>
+                )}
+                {connection.seen_by?.length === 1 && connection.seen_by[0] === "snort" && (
+                  <span className="muted"> from Snort&apos;s record of this connection</span>
+                )}
+                {connection.snort_site && (
+                  <div className="differs">
+                    Snort recorded {connection.snort_service ? `${connection.snort_service} ` : ""}
+                    {connection.snort_site} for this connection
+                  </div>
+                )}
                 {connection.by_address && (
                   <div className="muted">
                     Probably: no TLS details on this alert, but {connection.server} was reached as this site in a
@@ -196,6 +216,21 @@ export function AlertDetail({
                   Probably: nothing in this traffic names it, so this is who owns {connection.server}, the network the
                   server runs on, not necessarily the app.
                 </div>
+              </Fact>
+            )}
+            {connection?.encryption && (
+              <Fact name="Encryption">
+                {[connection.encryption.version, connection.encryption.cipher, connection.encryption.curve]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Fact>
+            )}
+            {connection?.certificate && (
+              <Fact name="Certificate">
+                {connection.certificate.subject}
+                {connection.certificate.issuer && (
+                  <div className="muted">issued by {connection.certificate.issuer}</div>
+                )}
               </Fact>
             )}
             {alert.src && <Fact name="Source">{alert.src}</Fact>}

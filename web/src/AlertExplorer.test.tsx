@@ -110,4 +110,17 @@ describe("RawOutput", () => {
     expect(html.indexOf("2001119")).toBeLessThan(html.indexOf("254"));
     expect(html).toContain("&quot;signature_id&quot;: 2001119");
   });
+
+  it("shows Snort's record of the TLS connection with the file it wrote it to", () => {
+    const records = [
+      { id: 1, engine: "snort" as const, uid: "01M6001", record: { sid: 14, gid: 129 } },
+      { id: -1, engine: "snort" as const, uid: null, source: "snort_tls", record: { server_name: "www.youtube.com" } },
+    ];
+    const html = renderToStaticMarkup(<RawOutput records={records} current={1} />);
+
+    expect(html).toContain("Snort · this alert");
+    expect(html).toContain("Snort · the TLS connection");
+    expect(html).toContain("/var/log/snort/file_connector_tls_transmit");
+    expect(html).toContain("www.youtube.com");
+  });
 });

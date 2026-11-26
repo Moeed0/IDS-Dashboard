@@ -161,6 +161,8 @@ class Settings:
     db_file: Path
     state_file: Path
     snort_alert_file: Path
+    # Snort's extractor log: a JSON line per TLS connection (ids/snort_tls.py).
+    snort_tls_file: Path
     suricata_eve_file: Path
     interface: str
     alert_retention: int
@@ -219,6 +221,10 @@ def get_settings() -> Settings:
         snort_alert_file=_path_from_env(
             "IDS_SNORT_ALERT_FILE",
             "/var/log/snort/alert_json.txt",
+        ),
+        snort_tls_file=_path_from_env(
+            "IDS_SNORT_TLS_FILE",
+            "/var/log/snort/file_connector_tls_transmit",
         ),
         suricata_eve_file=_path_from_env(
             "IDS_SURICATA_EVE_FILE",

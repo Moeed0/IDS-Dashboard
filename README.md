@@ -94,7 +94,8 @@ network interface (afpacket)
   service, app (as Snort's OpenAppID names it), rule, addresses and port, and "Show the newest" 5, 10, 20 or any
   number. A click on an alert shows all of it: its rule's text, why it
   fired, the other alerts on its packet, and "Raw output", each of those
-  alerts' record as Snort or Suricata wrote it. What the filters choose can be
+  alerts' record as Snort or Suricata wrote it, and Snort's record of the
+  TLS connection it was on. What the filters choose can be
   downloaded as combined JSON
   ([docs/combined-json-format.md](docs/combined-json-format.md)) or sent to
   the LLM PC (`IDS_LLM_URL` in `.env`), where `scripts/llm_receiver.py`
@@ -378,6 +379,18 @@ malware), never what it sends. With `sudo deploy/apply-suricata-settings.sh`
   ("Tencent Building network?", "Zenlayer network?"): who runs the server,
   not necessarily the app. A name given with `scripts/tls_fingerprints.py
   --label` comes first; the combined JSON gives that name with it;
+- Snort's extractor (`deploy/snort/snort.lua`) writes its own record of
+  each TLS connection to `/var/log/snort/file_connector_tls_transmit` (the
+  site, the TLS version, cipher and curve, the certificate's subject and
+  issuer), which the collector keeps (`snort_tls`, `src/ids/snort_tls.py`)
+  to check alerts with: an alert on a connection both engines named the
+  site of says "✓ both engines" in its panel, a site Snort recorded
+  differently is written under it in red, and an alert with no TLS details
+  of its own (any Snort alert, a lone reset) on a connection Snort
+  recorded gets that connection's site for sure, without the "?". The
+  panel gives each name once, with how the connection is encrypted and
+  its certificate. Snort has no JA3 or JA4, and no QUIC inspector, so the
+  programs and QUIC stay Suricata's;
 - the threat-intel database holds FoxIO's JA4+ mapping, abuse.ch's malware
   JA3s and domain-list-community's sites of each service, which
   `intel_lookup.py` on the LLM PC looks the file's fingerprints up in

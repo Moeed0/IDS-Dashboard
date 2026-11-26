@@ -41,6 +41,7 @@ from ids.combined_detections import (
 )
 from ids.config import KNOWN_ENGINES
 from ids.ids_config import read_network_variables
+from ids.snort_tls import checked, details, on_flow
 from ids.test_alert import read_result
 from ids.tls_fingerprints import (
     Intel,
@@ -552,8 +553,10 @@ def alerts(
     alert on a TLS or QUIC connection has ``names``: its program and the
     service of its site, in a few words (ids/tls_fingerprints.py
     ``short_name``, from the threat-intel database ``intel_db``); any other
-    alert to or from an address a TLS handshake went to has the service of
-    the sites seen there, ending in "?" (``names_by_address``).
+    alert on a TLS connection Snort recorded (ids/snort_tls.py) has the
+    service of that connection's site; any other alert to or from an
+    address a TLS handshake went to has the service of the sites seen
+    there, ending in "?" (``names_by_address``).
     """
     chosen = filters if filters is not None else AlertFilter(
         engine=engine, since_ms=since_ms, search=search,
@@ -594,7 +597,9 @@ def alerts(
             f"SELECT id, raw_json FROM alerts WHERE id IN ({', '.join('?' for _ in encrypted)})", encrypted
         ).fetchall()) if encrypted else {}
         servers = server_sites(connection, (value for row in rows for value in (row[11], row[13])))
-    names = _connection_short_names(rows, natives, servers, db_path, intel_db)
+        # Snort's record of each alert's TLS connection.
+        flows = {row[0]: on_flow(connection, row[11], row[12], row[13], row[14], row[2]) for row in rows}
+    names = _connection_short_names(rows, natives, flows, servers, db_path, intel_db)
     # Each packet's rows together, where its first row stands.
     first_row: dict[Any, int] = {}
     for index, row in enumerate(rows):
@@ -628,18 +633,20 @@ def alerts(
 def _connection_short_names(
     rows: Sequence[Sequence[Any]],
     natives: Mapping[int, str | None],
+    flows: Mapping[int, Mapping[str, Any] | None],
     servers: Mapping[str, list[str]],
     db_path: Path | str,
     intel_db: Path | str | None,
 ) -> dict[int, str]:
     """Each alert's connection named in a few words, by id: from its own
-    TLS or QUIC details, or else by its server's address."""
+    TLS or QUIC details or Snort's record of its connection, or else by
+    its server's address."""
     known = fingerprint_labels(db_path) if natives else {}
     intel = Intel(intel_db)
     named = {}
     try:
         for row in rows:
-            names = _native_names(natives.get(row[0]), known, intel)
+            names = checked(_native_names(natives.get(row[0]), known, intel), flows.get(row[0]), intel)
             if not names_something(names):
                 # The destination first: an alert usually goes to the server.
                 names = names_by_address((row[13], row[11]), servers, intel)
@@ -1248,7 +1255,10 @@ def alert_detail(
     keeps the keys in alphabetical order. ``connection``, for a Suricata
     alert on a TLS or QUIC connection, names its program and the service
     of its site (ids/tls_fingerprints.py ``connection_names``, from the
-    threat-intel database ``intel_db``)."""
+    threat-intel database ``intel_db``), checked against Snort's record of
+    the same connection (ids/snort_tls.py ``checked``), with how it is
+    encrypted and the server's certificate (``details``); that record is
+    the last of ``raw`` (``source`` "snort_tls")."""
     with closing(_connect(db_path)) as connection:
         found = connection.execute(
             "SELECT event_ts_utc, engine FROM alerts WHERE id = ?", (int(alert_id),)
@@ -1277,6 +1287,8 @@ def alert_detail(
                 together,
             )
         }
+        mine = listed[alert_id]
+        flow = on_flow(connection, mine[11], mine[12], mine[13], mine[14], mine[2])
     packet_uid = listed[packet][15] if packet in listed else listed[alert_id][15]
     by_id = {row["id"]: row for row in near}
     rows = sorted(
@@ -1305,33 +1317,44 @@ def alert_detail(
             for key in ("rules", "cves", "attack_techniques", "flows", "packets")
             if key in document
         },
-        "connection": _connection(by_id.get(alert_id), listed[alert_id], db_path, intel_db),
+        "connection": _connection(by_id.get(alert_id), listed[alert_id], flow, db_path, intel_db),
         "raw": [
             _raw_record(by_id[other], listed[other][15])
             for other in (alert_id, *(other for other in together if other != alert_id))
             if other in listed and other in by_id
-        ],
+        ] + ([{"id": -1, "engine": "snort", "uid": None, "source": "snort_tls", "record": flow["record"]}] if flow else []),
     }
 
 
 def _connection(
     row: Mapping[str, Any] | None,
     listed: Sequence[Any],
+    flow: Mapping[str, Any] | None,
     db_path: Path | str,
     intel_db: Path | str | None,
 ) -> dict[str, Any] | None:
-    """The program and service of a Suricata alert's TLS or QUIC connection,
-    or else (any alert) the service of its server's address."""
+    """The program and service of a Suricata alert's TLS or QUIC connection
+    checked against Snort's record of it (``flow``), or Snort's site alone,
+    or else (any alert) the service of its server's address; with how the
+    connection is encrypted and its certificate, when an engine gives them."""
     intel = Intel(intel_db)
     try:
+        native = None
         names = None
         if row is not None and row["engine"] == "suricata":
+            try:
+                native = json.loads(row.get("raw_json") or "null")
+            except ValueError:
+                native = None
             names = _native_names(row.get("raw_json"), fingerprint_labels(db_path), intel)
+        names = checked(names, flow, intel)
+        extra = details(native if isinstance(native, Mapping) else None, flow)
         if names_something(names):
-            return names
+            return names | extra
         with closing(_connect(db_path)) as connection:
             servers = server_sites(connection, (listed[11], listed[13]))
-        return names_by_address((listed[13], listed[11]), servers, intel) or names
+        found = names_by_address((listed[13], listed[11]), servers, intel) or names
+        return (found | extra) if found else (extra or None)
     finally:
         intel.close()
 
