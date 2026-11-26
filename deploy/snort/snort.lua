@@ -255,9 +255,14 @@ suppress =
 -- 112:1 (arp_spoof) unicast ARP request: the Archer checks its ARP entries
 -- by asking each client directly, about 36,000 times a day. arp_spoof's
 -- other alerts (112:2-4, forged ARP) stay on.
+-- 1:1384 OS-WINDOWS Microsoft Windows UPnP malformed advertisement (since
+-- 26 Nov 2026): the routers' ordinary UPnP announcements, about 1,200 an
+-- hour; it looks for a 2001 attack on Windows ME/XP. Its Suricata copy
+-- (2101384) is off too (deploy/suricata/disable.conf).
 suppress =
 {
     { gid = 112, sid = 1 },
+    { gid = 1, sid = 1384 },
 }
 
 --[[
