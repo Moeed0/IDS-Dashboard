@@ -24,6 +24,8 @@ import { clock, stamp } from "./time";
 
 type Column = {
   title: string;
+  /** The heading, when shorter than the title. */
+  heading?: string;
   value: (row: AlertRow) => string;
   /** What the cell shows, when that is not the value as text. */
   render?: (row: AlertRow) => ReactNode;
@@ -42,11 +44,13 @@ const TIME: Column = {
   tip: (row) => `${stamp(row.time_ms)} PKT`,
 };
 // Only when both engines run.
+// As wide as its tick: its heading is one too, "Both" on hover.
 const BOTH: Column = {
   title: "Both",
+  heading: "✓",
   value: (row) => (row.both ? "✓" : ""),
   className: "both",
-  hint: "Both engines alerted on this packet",
+  hint: "Both: both engines alerted on this packet",
 };
 // The alerts on one packet carry one ID, in both engines' lists, and sit
 // together with one shade behind them.
@@ -577,7 +581,7 @@ function AlertTable({
                 <tr>
                   {columns.map((column) => (
                     <th key={column.title} className={column.className} title={column.hint}>
-                      {column.title}
+                      {column.heading ?? column.title}
                     </th>
                   ))}
                 </tr>
