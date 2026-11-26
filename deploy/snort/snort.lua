@@ -250,6 +250,16 @@ suppress =
 }
 --]]
 
+-- Alerts not wanted (the user's word, 26 Nov 2026; every other rule stays
+-- on, for the most alerts):
+-- 112:1 (arp_spoof) unicast ARP request: the Archer checks its ARP entries
+-- by asking each client directly, about 36,000 times a day. arp_spoof's
+-- other alerts (112:2-4, forged ARP) stay on.
+suppress =
+{
+    { gid = 112, sid = 1 },
+}
+
 --[[
 event_filter =
 {
