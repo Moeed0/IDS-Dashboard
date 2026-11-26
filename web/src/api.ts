@@ -193,6 +193,11 @@ export interface AlertRow {
   packet?: string;
   /** Both engines alerted on its packet. */
   both: boolean;
+  /** For a Suricata alert on a TLS or QUIC connection: its program and the
+   * service of its site, each name once ("Chromium Browser · Youtube"); for
+   * any alert to or from an address a TLS handshake went to, the service of
+   * the sites seen there, ending in "?" ("Instagram?"). */
+  names?: string;
 }
 
 /** One alert, whole (/alerts/{id}): as the lists show it, the other alerts
@@ -206,6 +211,32 @@ export interface AlertDetails {
   attack_techniques?: Record<string, unknown>;
   flows?: Record<string, unknown>;
   packets?: unknown[];
+  /** Each alert's record as its engine wrote it, this alert's first. */
+  raw?: RawRecord[];
+  /** For a Suricata alert on a TLS or QUIC connection: its client
+   * fingerprint, the program that is, and its site with the service it
+   * belongs to (from the threat-intel database); null otherwise. */
+  connection?: {
+    fingerprint: string | null;
+    program: { name: string; source: string; malware: boolean } | null;
+    site: string | null;
+    service: string | null;
+    /** Named by its server's address: the sites a TLS handshake reached
+     * there, which may not be this connection's. */
+    by_address?: boolean;
+    server?: string;
+    /** Named by the network that owns the server's address, when no
+     * handshake reached it (iptoasn.com). */
+    owner?: { name: string; asn: number; country: string | null; description: string };
+  } | null;
+}
+
+/** One alert's record as Snort or Suricata wrote it (alert_json.txt, eve.json). */
+export interface RawRecord {
+  id: number;
+  engine: Engine;
+  uid?: string | null;
+  record: unknown;
 }
 
 export interface AlertPage {
@@ -410,6 +441,34 @@ export async function fetchSelection(params: Params): Promise<{ filename: string
 /** Sends the combined JSON of the alerts the filters choose to the LLM PC. */
 export async function sendSelection(params: Params): Promise<SentSelection> {
   return (await (await request("/export/selection/send", params, undefined, "POST")).json()) as SentSelection;
+}
+
+/** One device's client fingerprint (/tls-fingerprints). */
+export interface TlsFingerprint {
+  device: string;
+  /** The JA4, or ja3:<hash> when Suricata gave none. */
+  fingerprint: string;
+  ja4: string | null;
+  protocols: string[];
+  first_seen_ms: number;
+  last_seen_ms: number;
+  connections: number;
+  /** The newest first. */
+  sites: string[];
+  ja3: string[];
+  ja3s: string[];
+  alpn: string[];
+  /** The program a person named it as. */
+  app: string | null;
+  note: string | null;
+  /** How many devices used it. */
+  devices: number;
+  /** The program the threat-intel database knows it as (FoxIO's JA4+
+   * mapping, or abuse.ch's list of malware JA3s); null when neither lists it. */
+  known_app: { name: string; source: string; malware: boolean } | null;
+  /** Its sites under the service each belongs to, each service once; the
+   * sites of no known service last, with a null name. */
+  services: { name: string | null; sites: string[] }[];
 }
 
 /** What useApi gives. */

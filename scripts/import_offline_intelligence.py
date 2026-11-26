@@ -10,12 +10,14 @@ import csv
 import gzip
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import shutil
 import re
 import sqlite3
 import subprocess
+import tarfile
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -37,6 +39,68 @@ DEFAULT_TALOS_PAGES_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "intel" / "sources" / "talos" / "rule_docs.jsonl"
 )
 DEFAULT_BUILTIN_STUBS_PATH = Path("/usr/local/share/doc/snort/builtin_stubs.txt")
+# Which program a TLS fingerprint is: FoxIO's JA4+ mapping (the free list in
+# its JA4 repository; the full JA4+ database at ja4db.foxio.io needs a paid
+# account to export) and abuse.ch's SSL Blacklist of malware JA3s.
+# scripts/download_intel_sources.py fetches both.
+FINGERPRINT_SOURCES = Path(__file__).resolve().parents[1] / "data" / "intel" / "sources" / "fingerprints"
+DEFAULT_FOXIO_MAPPING_PATH = FINGERPRINT_SOURCES / "ja4plus-mapping.csv"
+DEFAULT_SSLBL_JA3_PATH = FINGERPRINT_SOURCES / "sslbl_ja3_fingerprints.csv"
+TLS_FINGERPRINT_SQL = """
+DROP TABLE IF EXISTS tls_fingerprint_intel;
+CREATE TABLE tls_fingerprint_intel (
+    fingerprint TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    application TEXT,
+    library TEXT,
+    device TEXT,
+    os TEXT,
+    notes TEXT,
+    first_seen TEXT,
+    last_seen TEXT,
+    source TEXT NOT NULL
+);
+CREATE INDEX idx_tls_fingerprint_intel ON tls_fingerprint_intel(fingerprint);
+"""
+# Which service (app) each site name belongs to: v2fly's domain-list-community
+# (MIT licence), one list per service of the names it uses ("youtube":
+# youtube.com, googlevideo.com, ytimg.com…). Its lists of kinds of sites
+# (category-*, geolocation-*, tld-*, private, cn) are left out: they name no
+# service. scripts/download_intel_sources.py fetches it.
+DEFAULT_SITE_LIST_PATH = FINGERPRINT_SOURCES / "domain-list-community.tar.gz"
+SITE_SERVICES_SQL = """
+DROP TABLE IF EXISTS site_services;
+CREATE TABLE site_services (
+    domain TEXT NOT NULL,
+    match TEXT NOT NULL,
+    service TEXT NOT NULL,
+    PRIMARY KEY (domain, match, service)
+);
+"""
+# Which network owns each IP address: iptoasn.com's ip2asn-combined.tsv.gz
+# (public domain, PDDL 1.0): one range per line, with its AS number,
+# country and the AS's name. Names an alert's server when nothing in the
+# traffic does. scripts/download_intel_sources.py fetches it.
+DEFAULT_IP_OWNERS_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "intel" / "sources" / "iptoasn" / "ip2asn-combined.tsv.gz"
+)
+IP_OWNERS_SQL = """
+DROP TABLE IF EXISTS ip_owners;
+CREATE TABLE ip_owners (
+    range_start TEXT PRIMARY KEY,
+    range_end TEXT NOT NULL,
+    asn INTEGER NOT NULL,
+    country TEXT,
+    description TEXT NOT NULL
+) WITHOUT ROWID;
+"""
+_SITE_LIST_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.!-]*$")
+_SITE_DOMAIN_RE = re.compile(r"^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$")
+_SITE_LIST_SKIPPED = ("category-", "geolocation-", "tld-")
+_MAX_SITE_LIST_BYTES = 5_000_000
+# FoxIO's columns that hold a fingerprint, and the kind of each.
+_FOXIO_KINDS = ("ja4", "ja4s", "ja4h", "ja4x", "ja4t", "ja4tscan")
+_JA3_RE = re.compile(r"^[0-9a-f]{32}$")
 BUILTIN_DOCS_SQL = """
 DROP TABLE IF EXISTS snort_builtin_docs;
 CREATE TABLE snort_builtin_docs (
@@ -808,6 +872,156 @@ def _import_rule_docs(
     return count
 
 
+def _text_or_none(value: Any) -> str | None:
+    text = " ".join(str(value or "").split())
+    return text or None
+
+
+def _import_tls_fingerprints(
+    connection: sqlite3.Connection, foxio: Path | None, sslbl: Path | None,
+) -> int:
+    """Which program each known TLS fingerprint is, in tls_fingerprint_intel:
+    one row per fingerprint a source lists, its kind (ja4, ja4s, ja4h, ja4x,
+    ja4t, ja4tscan or ja3) and what the source says of it. The fingerprint
+    is lower-case, as Suricata writes it."""
+    connection.executescript(TLS_FINGERPRINT_SQL)
+    count = 0
+    if foxio is not None and foxio.is_file():
+        rows = []
+        with foxio.open(encoding="utf-8-sig", newline="") as handle:
+            for record in csv.DictReader(handle):
+                record = {(key or "").strip().lower(): value for key, value in record.items()}
+                described = [
+                    _text_or_none(record.get(name))
+                    for name in ("application", "library", "device", "os", "notes")
+                ]
+                for kind in _FOXIO_KINDS:
+                    fingerprint = _text_or_none(record.get(kind))
+                    if fingerprint:
+                        rows.append((fingerprint.lower(), kind, *described, None, None, "foxio_ja4plus_mapping"))
+        connection.executemany(
+            f"INSERT INTO tls_fingerprint_intel VALUES ({', '.join('?' * 10)})", rows
+        )
+        as_of = datetime.fromtimestamp(foxio.stat().st_mtime, tz=timezone.utc).date().isoformat()
+        _write_source_metadata(connection, "foxio_ja4plus_mapping", as_of, None, len(rows), [foxio])
+        count += len(rows)
+    if sslbl is not None and sslbl.is_file():
+        rows = []
+        updated = None
+        for line in sslbl.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("#"):
+                match = re.search(r"Last updated:\s*(\d{4}-\d{2}-\d{2})", line)
+                updated = match.group(1) if match else updated
+                continue
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) < 4 or not _JA3_RE.match(parts[0].lower()):
+                continue
+            reason = _text_or_none(",".join(parts[3:]))
+            rows.append((
+                parts[0].lower(), "ja3", reason, None, None, None,
+                "Listed by abuse.ch's SSL Blacklist: a JA3 seen in the TLS traffic of malware"
+                + (f" ({reason})" if reason else "") + ". A JA3 can be shared with ordinary software.",
+                parts[1] or None, parts[2] or None, "sslbl_ja3",
+            ))
+        connection.executemany(
+            f"INSERT INTO tls_fingerprint_intel VALUES ({', '.join('?' * 10)})", rows
+        )
+        as_of = updated or datetime.fromtimestamp(sslbl.stat().st_mtime, tz=timezone.utc).date().isoformat()
+        _write_source_metadata(connection, "sslbl_ja3", as_of, None, len(rows), [sslbl])
+        count += len(rows)
+    return count
+
+
+def _service_name(list_name: str) -> str:
+    """A list's name as a service's: "google-play" → "Google Play"."""
+    return " ".join(word.capitalize() for word in list_name.split("-") if word)
+
+
+def _import_site_services(connection: sqlite3.Connection, path: Path | None) -> int:
+    """Which service each site name belongs to, in site_services, from
+    domain-list-community's archive (read as it is, never unpacked): a row
+    per name and service, ``match`` 'domain' for the name and every name
+    under it, 'full' for that name only. Its include:, keyword: and regexp:
+    lines are left out (an included list's names are in that list)."""
+    if path is None or not path.is_file():
+        return 0
+    connection.executescript(SITE_SERVICES_SQL)
+    rows: set[tuple[str, str, str]] = set()
+    newest = 0
+    with tarfile.open(path, "r:gz") as archive:
+        for member in archive:
+            parent, _, name = member.name.rpartition("/")
+            if (
+                not member.isfile()
+                or not parent.endswith("/data")
+                or not _SITE_LIST_NAME_RE.match(name)
+                or name.startswith(_SITE_LIST_SKIPPED)
+                or name in ("private", "cn")
+                or member.size > _MAX_SITE_LIST_BYTES
+            ):
+                continue
+            handle = archive.extractfile(member)
+            if handle is None:
+                continue
+            newest = max(newest, int(member.mtime))
+            service = _service_name(name)
+            for line in handle.read().decode("utf-8", errors="replace").splitlines():
+                words = line.split("#", 1)[0].split()
+                if not words:
+                    continue
+                kind, _, value = words[0].rpartition(":")
+                kind = kind or "domain"
+                value = value.lower().strip(".")
+                if kind in ("domain", "full") and _SITE_DOMAIN_RE.match(value):
+                    rows.add((value, kind, service))
+    connection.executemany("INSERT INTO site_services VALUES (?, ?, ?)", sorted(rows))
+    as_of = datetime.fromtimestamp(
+        newest or path.stat().st_mtime, tz=timezone.utc
+    ).date().isoformat()
+    _write_source_metadata(connection, "domain_list_community", as_of, None, len(rows), [path])
+    return len(rows)
+
+
+def ip_key(value: str) -> str:
+    """An IP address as ip_owners keys it: its version, then the address as
+    32 hex digits, so that text order is address order."""
+    address = ipaddress.ip_address(value.strip())
+    return f"{address.version}{int(address):032x}"
+
+
+def _import_ip_owners(connection: sqlite3.Connection, path: Path | None) -> int:
+    """Which network owns each address range, in ip_owners (ranges no one
+    routes are left out)."""
+    if path is None or not path.is_file():
+        return 0
+    connection.executescript(IP_OWNERS_SQL)
+    count = 0
+    with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+        batch = []
+        for line in handle:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 5 or not parts[2].isdigit() or parts[2] == "0":
+                continue
+            try:
+                start, end = ip_key(parts[0]), ip_key(parts[1])
+            except ValueError:
+                continue
+            country = parts[3].strip()
+            batch.append((
+                start, end, int(parts[2]),
+                country if country and country != "None" else None, parts[4].strip(),
+            ))
+            if len(batch) >= 50_000:
+                connection.executemany("INSERT OR REPLACE INTO ip_owners VALUES (?, ?, ?, ?, ?)", batch)
+                count += len(batch)
+                batch = []
+        connection.executemany("INSERT OR REPLACE INTO ip_owners VALUES (?, ?, ?, ?, ?)", batch)
+        count += len(batch)
+    as_of = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).date().isoformat()
+    _write_source_metadata(connection, "iptoasn", as_of, None, count, [path])
+    return count
+
+
 def _import_builtin_docs(connection: sqlite3.Connection, path: Path | None) -> int:
     """Snort's own description of each built-in rule (builtin_stubs.txt: a
     line ``gid:sid``, then the description), in snort_builtin_docs."""
@@ -1039,13 +1253,50 @@ def add_rule_docs(
     built-in rules, and Suricata's rules' own) put in an existing database,
     replacing what it had of it: on a copy, which then replaces the database
     whole, so a reader or download in progress keeps the old one."""
+    return _update_copy(database, lambda connection: {
+        "talos_rule_docs": _import_rule_docs(
+            connection, _resolved(rule_docs_path), _resolved(talos_pages_path)
+        ),
+        "snort_builtin_docs": _import_builtin_docs(connection, _resolved(builtin_stubs_path)),
+        "snort_builtin_rules": _import_builtin_rules(connection, snort),
+        "suricata_rule_docs": _import_suricata_rule_docs(
+            connection, [_resolved(path) for path in suricata_rules_paths or ()],
+            _resolved(classification_path),
+        ),
+    })
+
+
+def add_tls_fingerprints(
+    database: str | Path = DEFAULT_DB_PATH,
+    foxio_mapping_path: str | Path | None = DEFAULT_FOXIO_MAPPING_PATH,
+    sslbl_ja3_path: str | Path | None = DEFAULT_SSLBL_JA3_PATH,
+    site_list_path: str | Path | None = DEFAULT_SITE_LIST_PATH,
+    ip_owners_path: str | Path | None = DEFAULT_IP_OWNERS_PATH,
+) -> dict[str, Any]:
+    """The known TLS fingerprints (FoxIO's JA4+ mapping, abuse.ch's malware
+    JA3s), the services of site names (domain-list-community) and the
+    owners of IP addresses (iptoasn.com) put in an existing database,
+    replacing what it had of them, the same way as add_rule_docs."""
+    return _update_copy(database, lambda connection: {
+        "tls_fingerprint_intel": _import_tls_fingerprints(
+            connection, _resolved(foxio_mapping_path), _resolved(sslbl_ja3_path)
+        ),
+        "site_services": _import_site_services(connection, _resolved(site_list_path)),
+        "ip_owners": _import_ip_owners(connection, _resolved(ip_owners_path)),
+    })
+
+
+def _resolved(path: str | Path | None) -> Path | None:
+    return Path(path).expanduser().resolve() if path is not None else None
+
+
+def _update_copy(database: str | Path, change) -> dict[str, Any]:
+    """``change`` (a function of a connection, giving its counts) made on a
+    copy of the existing database, which then replaces it whole, so a
+    reader or download in progress keeps the old one."""
     target = Path(database).expanduser().resolve()
     if not target.is_file():
         raise FileNotFoundError(f"Database does not exist: {target}")
-
-    def resolved(path: str | Path | None) -> Path | None:
-        return Path(path).expanduser().resolve() if path is not None else None
-
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
     )
@@ -1055,17 +1306,7 @@ def add_rule_docs(
         _copy_uncached(target, temporary)
         connection = sqlite3.connect(temporary)
         try:
-            counts = {
-                "talos_rule_docs": _import_rule_docs(
-                    connection, resolved(rule_docs_path), resolved(talos_pages_path)
-                ),
-                "snort_builtin_docs": _import_builtin_docs(connection, resolved(builtin_stubs_path)),
-                "snort_builtin_rules": _import_builtin_rules(connection, snort),
-                "suricata_rule_docs": _import_suricata_rule_docs(
-                    connection, [resolved(path) for path in suricata_rules_paths or ()],
-                    resolved(classification_path),
-                ),
-            }
+            counts = change(connection)
             connection.commit()
             check = connection.execute("PRAGMA quick_check").fetchone()[0]
             if check != "ok":
@@ -1093,6 +1334,10 @@ def import_sources(
     suricata_rules_paths: Iterable[str | Path] | None = DEFAULT_SURICATA_RULES_PATHS,
     classification_path: str | Path | None = DEFAULT_CLASSIFICATION_PATH,
     snort: str | None = DEFAULT_SNORT,
+    foxio_mapping_path: str | Path | None = DEFAULT_FOXIO_MAPPING_PATH,
+    sslbl_ja3_path: str | Path | None = DEFAULT_SSLBL_JA3_PATH,
+    site_list_path: str | Path | None = DEFAULT_SITE_LIST_PATH,
+    ip_owners_path: str | Path | None = DEFAULT_IP_OWNERS_PATH,
 ) -> dict[str, Any]:
     """Build a validated database from local files and atomically publish it."""
     target = Path(output_path).expanduser().resolve()
@@ -1175,6 +1420,13 @@ def import_sources(
                 [Path(path).expanduser().resolve() for path in suricata_rules_paths or ()],
                 Path(classification_path).expanduser().resolve() if classification_path else None,
             )
+            counts["tls_fingerprint_intel"] = _import_tls_fingerprints(
+                connection, _resolved(foxio_mapping_path), _resolved(sslbl_ja3_path)
+            )
+            counts["site_services"] = _import_site_services(
+                connection, _resolved(site_list_path)
+            )
+            counts["ip_owners"] = _import_ip_owners(connection, _resolved(ip_owners_path))
 
             connection.commit()
 
@@ -1215,6 +1467,38 @@ def main() -> None:
             "--builtin-stubs, --snort, --suricata-rules, --classification) in the "
             "existing database at --output; the other sources are kept."
         ),
+    )
+    parser.add_argument(
+        "--add-tls-fingerprints",
+        action="store_true",
+        help=(
+            "Only put the known TLS fingerprints (--foxio-mapping, --sslbl-ja3), the "
+            "services of site names (--site-list) and the owners of IP addresses "
+            "(--ip-owners) in the existing database at --output; the other sources are kept."
+        ),
+    )
+    parser.add_argument(
+        "--foxio-mapping",
+        default=str(DEFAULT_FOXIO_MAPPING_PATH),
+        help="FoxIO's JA4+ mapping CSV (default: data/intel/sources/fingerprints/ja4plus-mapping.csv).",
+    )
+    parser.add_argument(
+        "--sslbl-ja3",
+        default=str(DEFAULT_SSLBL_JA3_PATH),
+        help="abuse.ch's SSLBL JA3 CSV (default: data/intel/sources/fingerprints/sslbl_ja3_fingerprints.csv).",
+    )
+    parser.add_argument(
+        "--site-list",
+        default=str(DEFAULT_SITE_LIST_PATH),
+        help=(
+            "v2fly's domain-list-community archive (default: "
+            "data/intel/sources/fingerprints/domain-list-community.tar.gz)."
+        ),
+    )
+    parser.add_argument(
+        "--ip-owners",
+        default=str(DEFAULT_IP_OWNERS_PATH),
+        help="iptoasn.com's ip2asn-combined.tsv.gz (default: data/intel/sources/iptoasn/ip2asn-combined.tsv.gz).",
     )
     parser.add_argument(
         "--rule-docs",
@@ -1273,6 +1557,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.add_tls_fingerprints:
+        print(json.dumps(add_tls_fingerprints(
+            args.output, args.foxio_mapping, args.sslbl_ja3, args.site_list, args.ip_owners,
+        ), indent=2))
+        return
     if args.add_rule_docs:
         print(json.dumps(add_rule_docs(
             args.output, args.rule_docs, args.talos_pages, args.builtin_stubs,
@@ -1300,6 +1589,10 @@ def main() -> None:
         suricata_rules_paths=args.suricata_rules or DEFAULT_SURICATA_RULES_PATHS,
         classification_path=args.classification,
         snort=args.snort,
+        foxio_mapping_path=args.foxio_mapping,
+        sslbl_ja3_path=args.sslbl_ja3,
+        site_list_path=args.site_list,
+        ip_owners_path=args.ip_owners,
     )
     print(json.dumps(result, indent=2))
 

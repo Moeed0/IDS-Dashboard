@@ -42,6 +42,15 @@ from ids.combined_detections import (
 from ids.config import KNOWN_ENGINES
 from ids.ids_config import read_network_variables
 from ids.test_alert import read_result
+from ids.tls_fingerprints import (
+    Intel,
+    connection_names,
+    names_by_address,
+    names_something,
+    server_sites,
+    short_name,
+)
+from ids.tls_fingerprints import labels as fingerprint_labels
 from ids.uids import uid_text
 from ids.uptime import off_during
 
@@ -525,6 +534,7 @@ def alerts(
     page_size: int = 25,
     engines: Sequence[str] = ENGINES,
     filters: AlertFilter | None = None,
+    intel_db: Path | str | None = None,
 ) -> dict[str, Any]:
     """One page of stored alerts of the ``engines``, newest first, with how
     many there are (``total``) and how many match before ``last`` keeps the
@@ -538,7 +548,12 @@ def alerts(
     stored alert on it, the same in every list) and says whether both
     engines alerted on it (``both``), matched as in the combined export. A
     page's rows are grouped by packet: the packets in the order of their
-    newest row, each packet's rows together, Snort's first.
+    newest row, each packet's rows together, Snort's first. A Suricata
+    alert on a TLS or QUIC connection has ``names``: its program and the
+    service of its site, in a few words (ids/tls_fingerprints.py
+    ``short_name``, from the threat-intel database ``intel_db``); any other
+    alert to or from an address a TLS handshake went to has the service of
+    the sites seen there, ending in "?" (``names_by_address``).
     """
     chosen = filters if filters is not None else AlertFilter(
         engine=engine, since_ms=since_ms, search=search,
@@ -573,6 +588,13 @@ def alerts(
             uids.update(connection.execute(
                 f"SELECT id, uid FROM alerts WHERE id IN ({', '.join('?' for _ in named)})", named
             ).fetchall())
+        # Suricata names its TLS and QUIC connections' app_proto "tls" and "quic".
+        encrypted = [row[0] for row in rows if row[1] == "suricata" and row[10] in ("tls", "quic")]
+        natives = dict(connection.execute(
+            f"SELECT id, raw_json FROM alerts WHERE id IN ({', '.join('?' for _ in encrypted)})", encrypted
+        ).fetchall()) if encrypted else {}
+        servers = server_sites(connection, (value for row in rows for value in (row[11], row[13])))
+    names = _connection_short_names(rows, natives, servers, db_path, intel_db)
     # Each packet's rows together, where its first row stands.
     first_row: dict[Any, int] = {}
     for index, row in enumerate(rows):
@@ -597,10 +619,46 @@ def alerts(
                 row,
                 uids.get(packets.get(row[0], (row[0], False))[0]),
                 packets.get(row[0], (row[0], False))[1],
-            )
+            ) | ({"names": names[row[0]]} if names.get(row[0]) else {})
             for row in rows
         ],
     }
+
+
+def _connection_short_names(
+    rows: Sequence[Sequence[Any]],
+    natives: Mapping[int, str | None],
+    servers: Mapping[str, list[str]],
+    db_path: Path | str,
+    intel_db: Path | str | None,
+) -> dict[int, str]:
+    """Each alert's connection named in a few words, by id: from its own
+    TLS or QUIC details, or else by its server's address."""
+    known = fingerprint_labels(db_path) if natives else {}
+    intel = Intel(intel_db)
+    named = {}
+    try:
+        for row in rows:
+            names = _native_names(natives.get(row[0]), known, intel)
+            if not names_something(names):
+                # The destination first: an alert usually goes to the server.
+                names = names_by_address((row[13], row[11]), servers, intel)
+            name = short_name(names)
+            if name:
+                named[row[0]] = name
+    finally:
+        intel.close()
+    return named
+
+
+def _native_names(
+    text: str | None, known: Mapping[str, Mapping[str, Any]], intel: Intel,
+) -> dict[str, Any] | None:
+    try:
+        native = json.loads(text) if text else None
+    except ValueError:
+        return None
+    return connection_names(native, labels=known, intel=intel) if isinstance(native, Mapping) else None
 
 
 # The columns of an alert as the lists show it (_listed).
@@ -961,6 +1019,7 @@ def combined_export(
         window_end=end,
         length_label=length_label,
         rule_intelligence=rule_intelligence,
+        fingerprint_labels=fingerprint_labels(db_path),
     )
     packets = document.get("packets", [])
     return {
@@ -1146,6 +1205,7 @@ def selection_export(
         length_label=label,
         rule_intelligence=rule_intelligence,
         trim_to_window=False,
+        fingerprint_labels=fingerprint_labels(db_path),
     )
     taken = [chosen.engine] if chosen.engine else list(engines)
     slug = (
@@ -1174,6 +1234,7 @@ def alert_detail(
     rule_intelligence: Callable[[str, Any, Any, str], Mapping[str, Any] | None]
     | None = offline_rule_intelligence,
     engines: Sequence[str] = ENGINES,
+    intel_db: Path | str | None = None,
 ) -> dict[str, Any] | None:
     """Everything about one stored alert, for the Alert Explorer's side
     panel; None when no alert of the ``engines`` has that id. ``alert`` is
@@ -1181,7 +1242,13 @@ def alert_detail(
     packet (both engines'), and ``rules``, ``cves``, ``attack_techniques``,
     ``flows`` and ``packets`` what the combined JSON gives for that one
     packet (see docs/combined-json-format.md): each rule with its text and
-    enrichment, and each engine's own output."""
+    enrichment, and each engine's own output. ``raw`` is each of those
+    alerts' record as its engine wrote it (eve.json, alert_json.txt), the
+    alert first: every field and value as stored in ``raw_json``, which
+    keeps the keys in alphabetical order. ``connection``, for a Suricata
+    alert on a TLS or QUIC connection, names its program and the service
+    of its site (ids/tls_fingerprints.py ``connection_names``, from the
+    threat-intel database ``intel_db``)."""
     with closing(_connect(db_path)) as connection:
         found = connection.execute(
             "SELECT event_ts_utc, engine FROM alerts WHERE id = ?", (int(alert_id),)
@@ -1211,6 +1278,7 @@ def alert_detail(
             )
         }
     packet_uid = listed[packet][15] if packet in listed else listed[alert_id][15]
+    by_id = {row["id"]: row for row in near}
     rows = sorted(
         (row for row in near if row["id"] in listed),
         key=lambda row: (row["event_ts_utc"] or 0, row["id"]),
@@ -1223,6 +1291,7 @@ def alert_detail(
         rule_intelligence=rule_intelligence,
         trim_to_window=False,
         enrichment=True,
+        fingerprint_labels=fingerprint_labels(db_path),
     )
     return {
         "alert": _listed(listed[alert_id], packet_uid, both),
@@ -1236,4 +1305,43 @@ def alert_detail(
             for key in ("rules", "cves", "attack_techniques", "flows", "packets")
             if key in document
         },
+        "connection": _connection(by_id.get(alert_id), listed[alert_id], db_path, intel_db),
+        "raw": [
+            _raw_record(by_id[other], listed[other][15])
+            for other in (alert_id, *(other for other in together if other != alert_id))
+            if other in listed and other in by_id
+        ],
     }
+
+
+def _connection(
+    row: Mapping[str, Any] | None,
+    listed: Sequence[Any],
+    db_path: Path | str,
+    intel_db: Path | str | None,
+) -> dict[str, Any] | None:
+    """The program and service of a Suricata alert's TLS or QUIC connection,
+    or else (any alert) the service of its server's address."""
+    intel = Intel(intel_db)
+    try:
+        names = None
+        if row is not None and row["engine"] == "suricata":
+            names = _native_names(row.get("raw_json"), fingerprint_labels(db_path), intel)
+        if names_something(names):
+            return names
+        with closing(_connect(db_path)) as connection:
+            servers = server_sites(connection, (listed[11], listed[13]))
+        return names_by_address((listed[13], listed[11]), servers, intel) or names
+    finally:
+        intel.close()
+
+
+def _raw_record(row: Mapping[str, Any], uid: Any) -> dict[str, Any]:
+    """One alert's record as its engine wrote it: the stored JSON, or the
+    text when it isn't JSON."""
+    text = row.get("raw_json")
+    try:
+        record: Any = json.loads(text) if text else None
+    except ValueError:
+        record = text
+    return {"id": row["id"], "engine": row["engine"], "uid": uid_text(uid), "record": record}

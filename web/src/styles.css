@@ -639,6 +639,14 @@ td.rule {
 /* The message takes the width the other columns leave, at least 120px (a
    narrower table scrolls), and ends in "…" when it is longer; hovering shows
    it whole. */
+td.message .names {
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--suricata) 22%, transparent);
+  font-weight: 600;
+}
+
 td.message {
   width: 100%;
   max-width: 0;
@@ -967,6 +975,27 @@ td.bar.suricata {
   line-height: 1.45;
 }
 
+.drawer .raw-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawer .raw-head label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.drawer .raw-record h4 .link {
+  margin-left: 8px;
+}
+
+.drawer pre.raw.one-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .drawer pre.rule-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1141,3 +1170,49 @@ td.bar.suricata {
 .json-literal {
   color: var(--suricata);
 }
+
+/* TLS Fingerprints page */
+.fingerprints h2 {
+  margin-top: 0;
+}
+.fingerprints label {
+  display: inline-block;
+  margin: 0 0 12px;
+}
+.fingerprint-table td {
+  vertical-align: top;
+}
+.fingerprint-table .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
+/* A fingerprint on one line where the page is wide enough, else broken
+   after its parts; a JA3 wherever it must. */
+.fingerprint-table td.mono {
+  white-space: normal;
+}
+
+.fingerprint-table .fingerprint {
+  word-break: normal;
+}
+/* The names and sites wrap, so the table fits the page and its times stay
+   in view; the other columns keep to one line. */
+.fingerprint-table td.names {
+  min-width: 14em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fingerprint-table .services {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fingerprint-table .malware,
+.facts .malware {
+  color: var(--error);
+}
+

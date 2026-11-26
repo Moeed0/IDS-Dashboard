@@ -1,0 +1,41 @@
+# TLS and QUIC client fingerprints, Suricata only (Snort 3 makes no JA3 or
+# JA4). deploy/install-tls-fingerprints.sh installs this file, the Lua script
+# beside it and the known-bad lists as /etc/suricata/rules/tls-fingerprints.*
+# and adds the rules to Suricata's rule-files.
+#
+# Before a connection is encrypted the client says, in plain text, which TLS
+# versions, ciphers and extensions it supports. JA4 and JA3 turn that list
+# into a short code: one per program (a browser, an app, a script, a piece
+# of malware), never what is sent inside. JA3S is the same for the server's
+# reply. Suricata adds them to its TLS and QUIC records and to every alert on
+# a TLS connection (ja3-fingerprints and ja4-fingerprints: yes in its config,
+# deploy/apply-suricata-settings.sh).
+#
+# What is remembered stays across restarts, in /var/lib/suricata/data
+# (Suricata writes it when it stops):
+#   tls-ja4-seen.lst        every JA4 seen on the network
+#   tls-device-clients.lst  every client fingerprint seen on each device
+#
+# SIDs 1000101-1000199 are this file's (local.rules has 1000001-1000099).
+
+# A JA4 never seen on the network before: a program that hasn't connected
+# from any device yet. Once per JA4.
+alert tls any any -> any any (msg:"LOCAL TLS client fingerprint new on the network (JA4)"; flow:to_server; ja4.hash; dataset:set,tls-ja4-seen,type string,state tls-ja4-seen.lst,memcap 64mb,hashsize 65536; classtype:misc-activity; sid:1000101; rev:1;)
+alert quic any any -> any any (msg:"LOCAL QUIC client fingerprint new on the network (JA4)"; flow:to_server; ja4.hash; dataset:set,tls-ja4-seen,type string,state tls-ja4-seen.lst,memcap 64mb,hashsize 65536; classtype:misc-activity; sid:1000102; rev:1;)
+
+# A device using a TLS client it never used before: once per device and
+# fingerprint (tls-fingerprints.lua). The fingerprint is the JA3 text with
+# its extensions sorted, since Chrome and Firefox send them in a new order on
+# every connection; the alert also carries the JA4. QUIC connections aren't
+# checked here (Suricata's Lua has no JA3 for them): 1000102 covers them.
+# The first rule only declares the per-device list for the script; it never
+# alerts.
+alert tls any any -> any any (msg:"LOCAL TLS per-device fingerprint list (never alerts)"; flow:to_server; ja3.string; dataset:isset,tls-device-clients,type string,state tls-device-clients.lst,memcap 64mb,hashsize 65536; noalert; classtype:misc-activity; sid:1000103; rev:1;)
+alert tls:client_hello_done any any -> any any (msg:"LOCAL TLS client fingerprint new for this device"; lua:/etc/suricata/rules/tls-fingerprints.lua; classtype:misc-activity; sid:1000104; rev:1;)
+
+# Fingerprints on the known-bad lists (deploy/suricata/tls-fingerprints/
+# known-bad-*.txt, one per line): every connection that uses one.
+alert tls any any -> any any (msg:"LOCAL TLS known-bad client fingerprint (JA4)"; flow:to_server; ja4.hash; dataset:isset,tls-ja4-bad,type string,load tls-fingerprints-bad-ja4.lst; classtype:trojan-activity; sid:1000105; rev:1;)
+alert quic any any -> any any (msg:"LOCAL QUIC known-bad client fingerprint (JA4)"; flow:to_server; ja4.hash; dataset:isset,tls-ja4-bad,type string,load tls-fingerprints-bad-ja4.lst; classtype:trojan-activity; sid:1000106; rev:1;)
+alert tls any any -> any any (msg:"LOCAL TLS known-bad client fingerprint (JA3)"; flow:to_server; ja3.hash; dataset:isset,tls-ja3-bad,type string,load tls-fingerprints-bad-ja3.lst; classtype:trojan-activity; sid:1000107; rev:1;)
+alert tls any any -> any any (msg:"LOCAL TLS known-bad server fingerprint (JA3S)"; flow:to_client; ja3s.hash; dataset:isset,tls-ja3s-bad,type string,load tls-fingerprints-bad-ja3s.lst; classtype:trojan-activity; sid:1000108; rev:1;)

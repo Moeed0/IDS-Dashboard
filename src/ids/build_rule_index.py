@@ -706,6 +706,15 @@ def main() -> None:
             if local.is_file() and local not in files:
                 files.append(local)
 
+            # Suricata's TLS fingerprint rules, beside its config once
+            # deploy/install-tls-fingerprints.sh has installed them.
+            if engine == "suricata":
+                fingerprints = (
+                    Path(source["config_file"]).parent / "rules" / "tls-fingerprints.rules"
+                )
+                if fingerprints.is_file() and fingerprints not in files:
+                    files.append(fingerprints)
+
             totals = Counter()
 
             for rule_file in files:

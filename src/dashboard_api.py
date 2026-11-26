@@ -77,6 +77,7 @@ from ids.dashboard_data import (
 )
 from ids.offline_intelligence import DEFAULT_DB_PATH as INTEL_DB
 from ids.test_alert import result_path
+from ids.tls_fingerprints import fingerprint_list, set_label
 from ids.uptime import machine_off_periods
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -381,13 +382,14 @@ def create_app(
                 request, "page_size", default=25, minimum=1, maximum=max(PAGE_SIZES)
             ),
             engines=engines,
+            intel_db=intel_db,
         ))
 
     def alert_screen(request: Request) -> Response:
         """Everything about one alert, for the Alert Explorer's side panel."""
         found = alert_detail(
             db_path, request.path_params["alert_id"], rule_intelligence=rule_intelligence,
-            engines=engines,
+            engines=engines, intel_db=intel_db,
         )
         if found is None:
             return JSONResponse({"error": "no such alert"}, status_code=404)
@@ -485,6 +487,25 @@ def create_app(
             "both_engine_packets": built["both_engine_packets"],
         })
 
+    def tls_fingerprint_list(request: Request) -> Response:
+        """Every device's TLS client fingerprints (ids/tls_fingerprints.py)."""
+        return JSONResponse(fingerprint_list(db_path, intel_db))
+
+    def tls_fingerprint_label(request: Request) -> Response:
+        """Names the program a fingerprint is (``app``; empty takes the name
+        away), with an optional ``note``."""
+        try:
+            set_label(
+                db_path,
+                request.query_params.get("fingerprint", ""),
+                request.query_params.get("app", ""),
+                request.query_params.get("note"),
+                now_ms=int(time.time() * 1000),
+            )
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from None
+        return JSONResponse({"saved": True})
+
     def rule_pair_list(request: Request) -> Response:
         return JSONResponse(rule_pairs(db_path, engines=engines))
 
@@ -537,6 +558,8 @@ def create_app(
         Route("/alerts/values", guarded(alert_values)),
         Route("/alerts/{alert_id:int}", guarded(alert_screen)),
         Route("/rule-pairs", guarded(rule_pair_list)),
+        Route("/tls-fingerprints", guarded(tls_fingerprint_list)),
+        Route("/tls-fingerprints/label", guarded(tls_fingerprint_label), methods=["POST"]),
         Route("/export/window", guarded(export_window_screen)),
         Route("/export", guarded(export_file)),
         Route("/export/selection", guarded(selection_screen)),

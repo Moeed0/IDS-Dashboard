@@ -1,10 +1,11 @@
 // One alert, whole, in a panel down the right side of the Alert Explorer:
 // what the list cuts short, the other alerts on its packet, its rule (why it
 // fired, its text and what is known about it) and the engines' own output
-// for the packet, as the combined JSON gives them (GET /alerts/{id}).
-import { useEffect, type ReactNode } from "react";
+// for the packet, as the combined JSON gives them, and each alert's record as
+// its engine wrote it (GET /alerts/{id}).
+import { useEffect, useState, type ReactNode } from "react";
 import { SeverityCircles } from "./AlertExplorer";
-import { NAMES, ruleName, useApi, type AlertDetails, type AlertRow } from "./api";
+import { NAMES, ruleName, useApi, type AlertDetails, type AlertRow, type RawRecord } from "./api";
 import { stamp } from "./time";
 
 /** "why_triggered" as a heading: "Why triggered". */
@@ -33,6 +34,53 @@ function Value({ value }: { value: unknown }) {
 export function ruleEntry(rules: AlertDetails["rules"], alert: AlertRow): Record<string, unknown> | null {
   const name = `${alert.engine}_signature:${alert.gid ?? 1}:${alert.sid}:${alert.rev}`;
   return rules?.[name] ?? null;
+}
+
+/** Where each engine writes its records on the IDS. */
+const LOGS: Record<string, string> = {
+  snort: "/var/log/snort/alert_json.txt",
+  suricata: "/var/log/suricata/eve.json",
+};
+
+/** The records, one engine's after another's, as indented JSON or as the one
+ * line the engine wrote. */
+export function RawOutput({ records, current }: { records: RawRecord[]; current: number }) {
+  const [oneLine, setOneLine] = useState(false);
+  const [copied, setCopied] = useState<number | null>(null);
+  const text = (raw: RawRecord) =>
+    typeof raw.record === "string" ? raw.record : JSON.stringify(raw.record, null, oneLine ? undefined : 2);
+  const copy = (raw: RawRecord) => {
+    navigator.clipboard?.writeText(text(raw)).then(
+      () => setCopied(raw.id),
+      () => setCopied(null),
+    );
+  };
+  return (
+    <section>
+      <div className="raw-head">
+        <h3>Raw output</h3>
+        <label>
+          <input type="checkbox" checked={oneLine} onChange={(event) => setOneLine(event.target.checked)} /> one line
+        </label>
+      </div>
+      <p className="muted">
+        Each alert on this packet as its engine wrote it, every field and value, with the keys in alphabetical order.
+      </p>
+      {records.map((raw) => (
+        <div key={raw.id} className="raw-record">
+          <h4>
+            {NAMES[raw.engine] ?? raw.engine}
+            {raw.id === current ? " · this alert" : raw.uid ? ` · ${raw.uid}` : ""}
+            <span className="muted"> · {LOGS[raw.engine] ?? ""}</span>
+            <button type="button" className="link" onClick={() => copy(raw)}>
+              {copied === raw.id ? "copied" : "copy"}
+            </button>
+          </h4>
+          <pre className={oneLine ? "raw one-line" : "raw"}>{text(raw)}</pre>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 function Fact({ name, children }: { name: string; children: ReactNode }) {
@@ -72,6 +120,11 @@ export function AlertDetail({
   const alert = data?.alert;
   const rule = alert ? ruleEntry(data.rules, alert) : null;
   const { why_triggered: why, rule_text: text, ids_output: always, ...known } = rule ?? {};
+  // A TLS or QUIC connection's program and service, each name once: a
+  // service named the same as the program shows only its site.
+  const connection = data?.connection;
+  const serviceShown =
+    !!connection?.service && connection.service.toLowerCase() !== (connection.program?.name ?? "").toLowerCase();
 
   return (
     <aside className="drawer" aria-label="Alert">
@@ -104,6 +157,45 @@ export function AlertDetail({
             {alert.app && (
               <Fact name="App">
                 {alert.app} <span className="muted">as OpenAppID named it</span>
+              </Fact>
+            )}
+            {connection?.program && (
+              <Fact name="Program">
+                {connection.program.name}{" "}
+                <span className={connection.program.malware ? "malware" : "muted"}>
+                  {connection.program.malware ? "known malware, " : ""}from {connection.program.source}
+                </span>
+              </Fact>
+            )}
+            {connection?.site && (
+              <Fact name={serviceShown ? "Service" : "Site"}>
+                {serviceShown ? (
+                  <>
+                    {connection.service}
+                    {connection.by_address && "?"} <span className="muted">{connection.site}</span>
+                  </>
+                ) : (
+                  `${connection.site}${connection.by_address ? "?" : ""}`
+                )}
+                {connection.by_address && (
+                  <div className="muted">
+                    Probably: no TLS details on this alert, but {connection.server} was reached as this site in a
+                    TLS handshake. One address can serve several sites.
+                  </div>
+                )}
+              </Fact>
+            )}
+            {connection?.owner && !connection.site && (
+              <Fact name="Network">
+                {connection.owner.name}?{" "}
+                <span className="muted">
+                  AS{connection.owner.asn}
+                  {connection.owner.country && ` · ${connection.owner.country}`} · {connection.owner.description}
+                </span>
+                <div className="muted">
+                  Probably: nothing in this traffic names it, so this is who owns {connection.server}, the network the
+                  server runs on, not necessarily the app.
+                </div>
               </Fact>
             )}
             {alert.src && <Fact name="Source">{alert.src}</Fact>}
@@ -167,6 +259,8 @@ export function AlertDetail({
               <Value value={data.packets[0]} />
             </section>
           )}
+
+          {data.raw && data.raw.length > 0 && <RawOutput records={data.raw} current={alert.id} />}
         </>
       )}
     </aside>

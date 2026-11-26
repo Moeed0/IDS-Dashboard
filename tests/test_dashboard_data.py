@@ -580,8 +580,19 @@ def test_one_alert_comes_with_its_packet_as_the_combined_json_gives_it(tmp_path)
     # One packet, with both engines' parts.
     [packet] = detail["packets"]
     assert "snort" in packet and "suricata" in packet
+    # Each alert's record as its engine wrote it, the alert's first.
+    stored = {
+        row_id: json.loads(raw)
+        for row_id, raw in sqlite3.connect(db_path).execute("SELECT id, raw_json FROM alerts")
+    }
+    assert [(raw["id"], raw["engine"]) for raw in detail["raw"]] == [(2, "suricata"), (1, "snort")]
+    assert [raw["record"] for raw in detail["raw"]] == [stored[2], stored[1]]
+    assert detail["raw"][0]["uid"] == alert["uid"]
+    # A DNS answer, not a TLS connection: nothing to name.
+    assert detail["connection"] is None
     # The ARP alert is alone on its packet.
     arp = alert_detail(db_path, 3, rule_intelligence=None)
+    assert [raw["id"] for raw in arp["raw"]] == [3]
     assert (arp["alert"]["both"], arp["same_packet"], len(arp["packets"])) == (False, [], 1)
     assert alert_detail(db_path, 99, rule_intelligence=None) is None
     # Not an engine this machine runs.

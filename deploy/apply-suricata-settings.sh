@@ -22,6 +22,10 @@
 #   "low" with one shared pattern matcher (sgh-mpm-context single): the same
 #   rules and alerts, loaded in half the time. Same as
 #   deploy/optimize-memory.sh.
+# - JA3, JA3S and JA4 TLS fingerprints on (ja3-fingerprints and
+#   ja4-fingerprints: yes): Suricata adds them to its TLS and QUIC records
+#   and to every alert on a TLS connection; and the fingerprint rules
+#   (deploy/install-tls-fingerprints.sh, deploy/suricata/tls-fingerprints/).
 # - Its logs are no longer open to every user: root writes them, and only
 #   this folder's owner (the collector and the dashboard) may read them too.
 #
@@ -49,7 +53,7 @@ fi
 echo "== Backing up $config to $backup"
 cp -p "$config" "$backup"
 
-echo "== Capture on $iface, HOME_NET any; alert payloads as text, and pcap files of the alerted flows"
+echo "== Capture on $iface, HOME_NET any; alert payloads as text, pcap files of the alerted flows, TLS fingerprints"
 python3 - "$config" "$iface" <<'PYTHON'
 import re
 import sys
@@ -121,6 +125,14 @@ for index in range(card + 1, len(lines)):
         lines[index] = f"{match.group(1)}threads: 1\n"
         break
 
+# TLS fingerprints, always (not "auto": only when a rule needs them).
+for name in ("ja3-fingerprints", "ja4-fingerprints"):
+    index = next((i for i, line in enumerate(lines) if re.match(rf"^\s*#?\s*{name}:", line)), None)
+    if index is None:
+        sys.exit(f"!! no {name} line in {path}")
+    lead = re.match(r"^(\s*)", lines[index]).group(1)
+    lines[index] = f"{lead}{name}: yes\n"
+
 # detect: profile low, one shared pattern matcher.
 section = next(i for i, line in enumerate(lines) if re.match(r"^detect:", line))
 wanted = {"profile": "low", "sgh-mpm-context": "single"}
@@ -152,6 +164,9 @@ for file in enable.conf disable.conf modify.conf; do
 done
 # --no-test: with HOME_NET "any" its test fails and it would keep the old rules.
 suricata-update --no-test --quiet
+
+echo "== The TLS fingerprint rules"
+"$repo_dir/deploy/install-tls-fingerprints.sh" --no-restart
 
 echo "== Logs readable by root and $owner only"
 install -d /etc/systemd/system/suricata.service.d

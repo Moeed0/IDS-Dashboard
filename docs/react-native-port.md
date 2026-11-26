@@ -110,10 +110,12 @@ Until 5 November 2026 the rule counts and the engines' files were in
 | `GET /overview?step_minutes=&top_rules_length=` | `overview(db_path, ids_sources, alert_retention=…, step_minutes=…, top_rules_length=…)` | Overview screen data |
 | `GET /status` | `status(db_path, state_file)` | Whether the IDS stores alerts now, for the status panel |
 | `GET /live` | `live(db_path)` | The Overview's live chart: the last 15 minutes in 30-second steps |
-| `GET /alerts?<filters>&page=&page_size=` | `alerts(db_path, filters=AlertFilter(…), …)` | One page of alerts, newest first |
+| `GET /alerts?<filters>&page=&page_size=` | `alerts(db_path, filters=AlertFilter(…), …, intel_db=…)` | One page of alerts, newest first; a Suricata alert on a TLS or QUIC connection has `names`, its program and the service of its site in a few words, each name once ("Chromium Browser · Youtube"; the site when its service is unknown); any other alert (either engine) to or from an address a TLS handshake went to has the service of the sites seen there, ending in "?" ("Instagram?"), and failing that the owner of its first public address ("Zenlayer network?") |
 | `GET /alerts/values` | `filter_values(db_path)` | The protocols, classes, services and apps the filters offer |
 | `GET /alerts/{id}` | `alert_detail(db_path, id)` | One alert, whole, for the side panel |
 | `GET /rule-pairs` | `rule_pairs(db_path)` | The last hour's rules both engines fired on one packet, for the Alert Explorer |
+| `GET /tls-fingerprints` | `ids.tls_fingerprints.fingerprint_list(db_path, intel_db)` | Every device's TLS client fingerprints (JA4, or `ja3:<hash>`), the newest first: connections, first and last seen, sites (SNI), JA3s, JA3Ss, ALPNs, the app it was named with `scripts/tls_fingerprints.py --label`, and on how many devices; `known_app` (`{name, source, malware}`: the program the threat-intel database knows it as, null when it doesn't) and `services` (its sites under the service each belongs to, each service once, a site two services list under the one already there, the sites of no known service last with a null `name`), for the TLS Fingerprints page. The page has no column of its own for the program: its "Names and sites" column gives the program first (the given name, or else the known one with its source) when one is known, then each service with its sites; "also on N other devices" stands under the device |
+| `POST /tls-fingerprints/label?fingerprint=…&app=…&note=…` | `ids.tls_fingerprints.set_label` | Names the program a fingerprint is (an empty `app` takes the name away): `{"saved": true}`, or 400 with the reason |
 | `GET /export/selection?<filters>` | `selection(db_path, AlertFilter(…))` | What a download or send of the filtered alerts would hold |
 | `GET /export/selection/file?<filters>` | `selection_export(db_path, AlertFilter(…))` | The combined JSON file of the filtered alerts |
 | `POST /export/selection/send?<filters>` | `selection_export(…)`, then a POST to `IDS_LLM_URL` | Sends that file to the LLM PC |
@@ -445,7 +447,9 @@ each one left out takes every alert:
   browser; the filters last while the page is open. Each row is one line,
   so that the
   two lists side by side line up: a message too long for its column ends in
-  "…" and shows whole on hover.
+  "…" and shows whole on hover. An alert's `names` stand in a tag before
+  its message, so an encrypted connection's program and service show at a
+  glance.
 
 ### One alert, whole
 
@@ -456,19 +460,44 @@ A row clicked (or Enter on it) opens a panel down the right side:
 {"alert": {"id": 557556, "engine": "suricata", "…": "as a row of the list"},
  "same_packet": [{"id": 557557, "…": "the other alerts on its packet"}],
  "rules": {"suricata:2009205": {"why_triggered": "…", "rule_text": "…", "ids_output": {}}},
- "packets": [{"packet": 1, "time": "…", "suricata": [{"rules": ["…"], "ids_output": {}}]}]}
+ "packets": [{"packet": 1, "time": "…", "suricata": [{"rules": ["…"], "ids_output": {}}]}],
+ "connection": {"fingerprint": "t13d0309h2_55b375c5d22e_381798375d16", "program": null, "site": "graph.facebook.com", "service": "Facebook"},
+ "raw": [{"id": 557556, "engine": "suricata", "uid": "0HS1037", "record": {"event_type": "alert", "…": "as eve.json has it"}}]}
 ```
 
 - `alert` and `same_packet` are rows as the list gives them; `rules`, `cves`,
   `attack_techniques`, `flows` and `packets` are what the combined JSON gives
   for that one packet (docs/combined-json-format.md), each left out when
   empty.
+- `raw` is each of those alerts' record as its engine wrote it
+  (`/var/log/snort/alert_json.txt`, `/var/log/suricata/eve.json`), this
+  alert's first: the stored `raw_json`, every field and value, with the
+  keys in alphabetical order (a record that isn't JSON comes as its text).
+- `connection`, for a Suricata alert on a TLS or QUIC connection (null
+  otherwise): its client fingerprint, the program that is (`{name, source,
+  malware}`: a name given in the lab first, then the threat-intel
+  database's; null when neither knows it), and its site (SNI) with the
+  service it belongs to (null when unknown). An alert with no TLS details
+  of its own, to or from an address a TLS handshake went to, has instead
+  the site most reached there, the services of all its sites, `server` and
+  `"by_address": true`; the panel marks that name "?" and says why it is
+  only probable. An alert whose addresses no handshake went to has, for
+  its first public address, `owner` (`{name, asn, country, description}`,
+  the network that owns it, from iptoasn.com) with `server` and
+  `"by_address": true`; the panel shows it as "Network", and the list's
+  tag as "<owner> network?".
 - The panel shows the whole message, time, engine, rule (with a link that
-  puts it in the Rule filter), class, protocol and service, the app, both endpoints,
+  puts it in the Rule filter), class, protocol and service, the app, the
+  connection's program ("from" its source; red when it is known malware)
+  and its service with the site ("Site" alone when the service is unknown
+  or named like the program), both endpoints,
   the alert's and the packet's IDs; the other alerts on the packet, each a
   link that opens it; the alert's rule (why it fired, its text, and the rest
-  under its own headings); the CVEs and techniques; and the packet's entry
-  as JSON. Esc or ✕ closes it; the row it shows is outlined.
+  under its own headings); the CVEs and techniques; the packet's entry
+  as JSON; and "Raw output": each record of `raw` as indented JSON (or one
+  line, with "one line" ticked), headed by its engine, "this alert" or its
+  UID, and the log it came from, with "copy" to copy it. Esc or ✕ closes
+  it; the row it shows is outlined.
 - In the lists the headings stay in view while the page is scrolled, and a
   row that came in since the last answer lights up for a moment (page 1 of
   an unchanged list only).

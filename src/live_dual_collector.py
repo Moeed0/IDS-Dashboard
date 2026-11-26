@@ -16,6 +16,7 @@ from ids.db import (
 from ids.live_normalizer import normalize_live_event
 from ids.schema import ensure_schema
 from ids.tailer import PersistentJsonTailer
+from ids.tls_fingerprints import handshake, record_handshakes
 
 # How often the journal gets a line of how many alerts were stored.
 SUMMARY_SECONDS = 60
@@ -33,6 +34,8 @@ class PendingBatch:
     """
 
     rows: list[dict] = field(default_factory=list)
+    # Suricata's TLS and QUIC handshakes' fingerprints (ids/tls_fingerprints.py).
+    handshakes: list[dict] = field(default_factory=list)
     latest_positions: dict[str, tuple[int, int]] = field(
         default_factory=dict
     )
@@ -106,10 +109,13 @@ def flush_pending(
         return written
 
     # First write alerts. If this fails, no source position is acknowledged.
-    if pending.rows:
+    if pending.rows or pending.handshakes:
         conn = connect_database(settings.db_file)
 
         try:
+            if pending.handshakes:
+                record_handshakes(conn, pending.handshakes)
+
             insert_alert_batch(
                 conn,
                 pending.rows,
@@ -133,6 +139,7 @@ def flush_pending(
 
     written.update(row.get("engine") for row in pending.rows)
     pending.rows.clear()
+    pending.handshakes.clear()
     pending.latest_positions.clear()
     pending.processed_lines = 0
     return written
@@ -270,8 +277,13 @@ def handle_line(
         event,
     )
 
-    # Suricata has many EVE event types. Only alert events are inserted.
+    # Suricata has many EVE event types. Only alert events are inserted;
+    # its TLS and QUIC records give the devices' fingerprints.
     if normalized is None:
+        if engine == "suricata":
+            shake = handshake(event)
+            if shake is not None:
+                pending.handshakes.append(shake)
         pending.record_position(
             engine,
             inode,

@@ -93,7 +93,8 @@ network interface (afpacket)
   time (the last 5 minutes to 30 days), engine, severity, protocol, class,
   service, app (as Snort's OpenAppID names it), rule, addresses and port, and "Show the newest" 5, 10, 20 or any
   number. A click on an alert shows all of it: its rule's text, why it
-  fired, and the other alerts on its packet. What the filters choose can be
+  fired, the other alerts on its packet, and "Raw output", each of those
+  alerts' record as Snort or Suricata wrote it. What the filters choose can be
   downloaded as combined JSON
   ([docs/combined-json-format.md](docs/combined-json-format.md)) or sent to
   the LLM PC (`IDS_LLM_URL` in `.env`), where `scripts/llm_receiver.py`
@@ -101,9 +102,12 @@ network interface (afpacket)
   `python llm_receiver.py`; standard library only); the old alerts' zips
   are at the bottom. The file has no enrichment: the LLM PC fetches the
   threat-intel database from the dashboard (`/intel/intel.db`: NVD, EPSS,
-  CISA KEV, MITRE ATT&CK, Talos's Snort rule documentation and Snort's own
-  description of its built-in rules) and writes
-  what it says of each file's rules, CVEs and ATT&CK techniques as text for
+  CISA KEV, MITRE ATT&CK, Talos's Snort rule documentation, Snort's own
+  description of its built-in rules, FoxIO's and abuse.ch's known TLS
+  fingerprints, domain-list-community's services of site names, and
+  iptoasn.com's owners of IP addresses) and writes
+  what it says of each file's rules, CVEs, ATT&CK techniques and TLS
+  fingerprints as text for
   the LLM's prompt with `scripts/intel_lookup.py`
   (`python intel_lookup.py download http://<dashboard>:8501/`, then
   `python intel_lookup.py enrich <file>.json`; standard library only).
@@ -250,7 +254,7 @@ Neither rule set is in this repository; each comes from its maker.
 
 - **This lab's Suricata settings** (alert payloads as text, pcap files of the
   alerted flows, capture on `IDS_INTERFACE` with HOME_NET `any`, logs closed
-  to other users):
+  to other users, JA3/JA4 TLS fingerprints and their rules):
 
   ```bash
   sudo deploy/apply-suricata-settings.sh
@@ -319,8 +323,9 @@ by hand.
    ```
 
 6. Optional: build the threat-intel database, for the CVE, EPSS,
-   known-exploited and ATT&CK details in the combined export. It downloads
-   about 300 MB from NVD, FIRST, CISA and MITRE, and builds a database of
+   known-exploited, ATT&CK and known TLS fingerprint details in the combined
+   export. It downloads about 300 MB from NVD, FIRST, CISA, MITRE, FoxIO,
+   abuse.ch, domain-list-community (GitHub) and iptoasn.com, and builds a database of
    up to 1.6 GB in a few minutes. Run it again whenever you want fresher data.
    Without it the export still works, without those details.
 
@@ -337,6 +342,61 @@ by hand.
 
 8. Open `http://<machine>:8501/`. The page asks for the API token,
    `IDS_API_TOKEN` in `.env`, which the API creates on its first start.
+
+## TLS fingerprints
+
+Encrypted traffic can't be read, but before a connection is encrypted the
+client says in plain text which TLS versions, ciphers and extensions it
+supports. Suricata turns that into JA4 and JA3 fingerprints (and the server's
+reply into JA3S): one per program (a browser, an app, a script, a piece of
+malware), never what it sends. With `sudo deploy/apply-suricata-settings.sh`
+(or `sudo deploy/install-tls-fingerprints.sh` alone):
+
+- every Suricata alert on a TLS or QUIC connection carries its fingerprints,
+  the site (SNI) and the ALPNs, so the combined JSON has them too;
+- Suricata alerts on a client fingerprint new on the network (JA4), on a TLS
+  client a device never used before, and on every connection with a
+  fingerprint on the known-bad lists
+  (`deploy/suricata/tls-fingerprints/known-bad-*.txt`; SIDs 1000101–1000108);
+- the collector keeps each device's fingerprints (connections, first and
+  last seen, sites), which the dashboard's **TLS Fingerprints** page shows.
+  It names each one's program from the threat-intel database when FoxIO's
+  JA4+ mapping or abuse.ch's malware JA3s list it, and puts its sites under
+  the service each belongs to (www.youtube.com and i.ytimg.com under
+  YouTube), from domain-list-community; each name is written once (a site
+  two services list goes under the one already there), and a service named
+  like the program only shows its sites. The Alert Explorer names the
+  program and service of a Suricata alert's TLS or QUIC connection the
+  same way, in a tag before its message ("Facebook", "Adguard") and in its
+  alert panel. An alert with no TLS details of its own (a lone reset, a
+  stream event, an IP rule) to or from an address a TLS handshake went to
+  gets the service of the sites seen there, marked as probable
+  ("Instagram?"): one address can serve several sites. The collector keeps
+  each server address's sites for this (`tls_servers`). An address no
+  handshake went to (a game's UDP servers, say) is named by the network
+  that owns it, from iptoasn.com's list in the threat-intel database
+  ("Tencent Building network?", "Zenlayer network?"): who runs the server,
+  not necessarily the app. A name given with `scripts/tls_fingerprints.py
+  --label` comes first; the combined JSON gives that name with it;
+- the threat-intel database holds FoxIO's JA4+ mapping, abuse.ch's malware
+  JA3s and domain-list-community's sites of each service, which
+  `intel_lookup.py` on the LLM PC looks the file's fingerprints up in
+  (`download_intel_sources.py --fingerprints-only` adds them to an existing
+  database).
+
+The same from the command line, and adding a fingerprint to the known-bad
+lists (run the installer with sudo after that):
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/tls_fingerprints.py
+```
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/tls_fingerprints.py --bad <JA4 or JA3> "sqlmap"
+```
+
+A device is its IP address, so a device whose DHCP address changes starts
+afresh. Snort makes no fingerprints.
 
 ## Old alerts
 

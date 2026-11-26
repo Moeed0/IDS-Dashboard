@@ -1,0 +1,7 @@
+# Known-bad JA4 fingerprints, one per line; "#" starts a note. Every
+# connection that uses one raises an alert (tls-fingerprints.rules).
+# deploy/install-tls-fingerprints.sh puts the list into Suricata, so run it
+# (with sudo) after a change. A fingerprint to add: from an alert's "tls"
+# part, or scripts/tls_fingerprints.py, on traffic of the tool or malware
+# sample you ran in the lab. The format, as an example:
+#   t13d1516h2_aaaaaaaaaaaa_bbbbbbbbbbbb  # the program it is

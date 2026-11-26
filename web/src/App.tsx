@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertExplorer } from "./AlertExplorer";
 import { Overview } from "./Overview";
 import { StatusNote, StatusPanel, StatusStrip } from "./StatusPanel";
+import { TlsFingerprints } from "./TlsFingerprints";
 import { Unauthorized, engineNames, errorText, getJson, setToken, useApi, type Options, type Status } from "./api";
 import type { SearchRequest } from "./AlertExplorer";
 
-type Page = "overview" | "alerts";
+type Page = "overview" | "alerts" | "fingerprints";
 const PAGES: { key: Page; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "alerts", label: "Alert Explorer" },
+  { key: "fingerprints", label: "TLS Fingerprints" },
 ];
 
 export default function App() {
@@ -110,6 +112,12 @@ function Screens({
           <>
             <StatusNote status={status} />
             <AlertExplorer options={options} onUnauthorized={onUnauthorized} searchRequest={searchRequest} />
+          </>
+        )}
+        {page === "fingerprints" && (
+          <>
+            <StatusNote status={status} />
+            <TlsFingerprints onUnauthorized={onUnauthorized} />
           </>
         )}
       </main>

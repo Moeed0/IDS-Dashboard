@@ -89,12 +89,19 @@ const SEVERITY: Column = {
   render: (row) => <SeverityCircles severity={row.severity} />,
 };
 // The message comes last and takes the width the others leave, on one line:
-// a longer one ends in "…" and shows whole on hover.
+// a longer one ends in "…" and shows whole on hover. An encrypted
+// connection's names (its program, the service of its site) come first.
 const MESSAGE: Column = {
   title: "Message",
   value: (row) => row.message,
   className: "message",
-  tip: (row) => row.message,
+  tip: (row) => (row.names ? `${row.names}: ${row.message}` : row.message),
+  render: (row) => (
+    <>
+      {row.names && <span className="names">{row.names}</span>}
+      {row.message}
+    </>
+  ),
 };
 const PANEL_COLUMNS = [TIME, PACKET, BOTH, RULE, SEVERITY, MESSAGE];
 const TABLE_COLUMNS: Column[] = [

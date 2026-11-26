@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from scripts.import_offline_intelligence import add_rule_docs
+from scripts.import_offline_intelligence import add_rule_docs, add_tls_fingerprints
 from scripts.intel_lookup import enrich, lookup, named, prompt_text
 
 TALOS_DOCS = {
@@ -126,6 +126,7 @@ def test_rules_and_ids_are_found_in_each_way_a_file_writes_them():
         "rules": ["snort_signature:1:31978:5", "suricata_signature:1:2019232:7"],
         "cves": ["CVE-2014-6271", "CVE-2019-12259", "CVE-2020-11899"],
         "attack_techniques": ["T1059.004", "T1190"],
+        "tls_fingerprints": [],
     }
 
 
@@ -344,3 +345,104 @@ def test_snort_orgs_address_is_looked_up_once_not_for_each_page(monkeypatch):
     talos._remembered_lookup("example.org", 443)
 
     assert looked_up == ["www.snort.org", "example.org", "example.org"]
+
+
+FOXIO_MAPPING = """Application,Library,Device,OS,ja4,ja4s,ja4h,ja4x,ja4t,ja4tscan,Notes
+Chromium Browser,,,,t13d1516h2_8daaf6152771_02713d6af862,,,,,,
+,Python,,,t13d3013h2_1d37bd780c83_ecd0401ec68b,,,,,,
+Sliver Agent,GoLang,,,t13d190900_9dc949149365_97f8aa674fd9,t130200_1301_a56c5b993250,,,,,
+,,,Windows 10,,,,,64240_2-1-3-1-1-4_1460_8,,
+"""
+SSLBL_JA3 = """################################################################
+# abuse.ch Suricata JA3 Fingerprint Blacklist (CSV)            #
+# Last updated: 2021-08-03 14:33:44 UTC                        #
+################################################################
+#
+# ja3_md5,Firstseen,Lastseen,Listingreason
+b386946a5a44d1ddcc843bc75336dfce,2017-07-14 18:08:15,2019-07-27 20:42:54,Dridex
+8ecf4858a704c8936042f20a8bedee04,2020-12-27 16:53:04,2021-08-11 15:06:36,BitRAT
+# END (2) entries
+"""
+
+
+def _with_fingerprints(tmp_path):
+    db = _intel(tmp_path)
+    foxio = tmp_path / "ja4plus-mapping.csv"
+    foxio.write_text(FOXIO_MAPPING)
+    sslbl = tmp_path / "sslbl.csv"
+    sslbl.write_text(SSLBL_JA3)
+    assert add_tls_fingerprints(db, foxio, sslbl, None, None)["counts"] == {
+        "tls_fingerprint_intel": 7, "site_services": 0, "ip_owners": 0,
+    }
+    return db
+
+
+def test_a_tls_fingerprint_is_looked_up_by_its_ja4_or_ja3(tmp_path):
+    db = _with_fingerprints(tmp_path)
+
+    found = lookup(db, [
+        "T13D1516H2_8daaf6152771_02713d6af862",
+        "b386946a5a44d1ddcc843bc75336dfce",
+        "ja3s:b386946a5a44d1ddcc843bc75336dfce",
+        "t13d1715h2_5b57614c22b0_7121afd63204",
+        "2009208",
+    ])
+
+    assert found["tls_fingerprints"] == {
+        "t13d1516h2_8daaf6152771_02713d6af862": [
+            {"kind": "ja4", "application": "Chromium Browser", "source": "foxio_ja4plus_mapping"},
+        ],
+        "ja3:b386946a5a44d1ddcc843bc75336dfce": [{
+            "kind": "ja3", "application": "Dridex",
+            "notes": "Listed by abuse.ch's SSL Blacklist: a JA3 seen in the TLS traffic of malware (Dridex). "
+                     "A JA3 can be shared with ordinary software.",
+            "first_seen": "2017-07-14 18:08:15", "last_seen": "2019-07-27 20:42:54", "source": "sslbl_ja3",
+        }],
+    }
+    # A JA3 hash asked for as a JA3S is not the JA3; Firefox's JA4 isn't listed.
+    assert found["unknown_fingerprints"] == [
+        "ja3s:b386946a5a44d1ddcc843bc75336dfce", "t13d1715h2_5b57614c22b0_7121afd63204",
+    ]
+    assert "suricata_signature:1:2009208:4" in found["rules"]
+    assert found["sources"]["sslbl_ja3"] == "2021-08-03"
+
+
+def test_a_combined_files_fingerprints_are_looked_up(tmp_path):
+    db = _with_fingerprints(tmp_path)
+    # Suricata's TLS output as a combined file gives it, and the lab's names.
+    combined = {
+        "ids_output": {"suricata": {"tls": {
+            "ja4": "t13d3013h2_1d37bd780c83_ecd0401ec68b",
+            "ja3": {"hash": "8ecf4858a704c8936042f20a8bedee04", "string": "771,4866"},
+            "ja3s": {"hash": "895252f3ce80cebf7a8837be83ec8e16"},
+        }}},
+        "tls_fingerprints": {"ja3:284deaeae14ea5ddc96c5d7e59855422": {"app": "a lab script"}},
+    }
+
+    assert named(json.dumps(combined, indent=2))["tls_fingerprints"] == [
+        "ja3:284deaeae14ea5ddc96c5d7e59855422",
+        "ja3:8ecf4858a704c8936042f20a8bedee04",
+        "ja3s:895252f3ce80cebf7a8837be83ec8e16",
+        "t13d3013h2_1d37bd780c83_ecd0401ec68b",
+    ]
+    text = prompt_text(db, json.dumps(combined, indent=2))
+    assert (
+        "TLS fingerprint t13d3013h2_1d37bd780c83_ecd0401ec68b (JA4, TLS/QUIC client): "
+        "library: Python (FoxIO JA4+ mapping)"
+    ) in text
+    assert (
+        "TLS fingerprint ja3:8ecf4858a704c8936042f20a8bedee04 (JA3, TLS client): program: BitRAT "
+        "(abuse.ch SSL Blacklist JA3s)\n  Seen from 2020-12-27 16:53:04 to 2021-08-11 15:06:36"
+    ) in text
+    assert text.endswith(
+        "TLS fingerprints neither FoxIO's JA4+ mapping nor abuse.ch's SSL Blacklist lists: "
+        "ja3:284deaeae14ea5ddc96c5d7e59855422, ja3s:895252f3ce80cebf7a8837be83ec8e16\n"
+    )
+
+
+def test_a_database_without_the_fingerprint_table_knows_none(tmp_path):
+    db = _intel(tmp_path)
+
+    found = lookup(db, ["t13d1516h2_8daaf6152771_02713d6af862"])
+
+    assert found["unknown_fingerprints"] == ["t13d1516h2_8daaf6152771_02713d6af862"]

@@ -56,10 +56,11 @@ from ids.extended_alert_intelligence import (
     MEANING_NOTE_CAVEAT,
     MEANING_WITHOUT_CVES,
 )
+from ids.tls_fingerprints import fingerprints_in
 
 
 SCHEMA_ID = "ids.combined-detections"
-SCHEMA_VERSION = "14.2"
+SCHEMA_VERSION = "14.3"
 
 PKT = ZoneInfo("Asia/Karachi")
 
@@ -1719,6 +1720,7 @@ def build_combined_detections(
     generated_at: datetime | None = None,
     trim_to_window: bool = True,
     enrichment: bool = False,
+    fingerprint_labels: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the combined Snort + Suricata document for one time window.
 
@@ -1731,6 +1733,9 @@ def build_combined_detections(
     alert view) also what the offline intelligence says of them, and the
     file its CVEs and ATT&CK techniques. The file for the LLM has none: the
     LLM enriches it from the intelligence database itself.
+    ``fingerprint_labels`` ({fingerprint: {app, note}}, ids/tls_fingerprints.py)
+    are the programs people in the lab have said TLS fingerprints are; the
+    file names those of its Suricata alerts' fingerprints.
 
     The document is a timeline of the packets the alerts are on, oldest
     first; a packet both engines alerted on is one entry with both engines'
@@ -1874,6 +1879,15 @@ def build_combined_detections(
         if (details := rule.get("technique_details", {}).get(technique))
     }
 
+    # The lab's names for the TLS fingerprints the alerts carry.
+    named_fingerprints = {
+        fingerprint: {key: value for key, value in label.items() if value}
+        for match in matches
+        if match.engine == "suricata"
+        for fingerprint in fingerprints_in(match.native)
+        if (label := (fingerprint_labels or {}).get(fingerprint))
+    }
+
     length = length_label or _length_label(window_end - window_start)
     created = generated_at or datetime.now(tz=PKT)
 
@@ -1897,6 +1911,7 @@ def build_combined_detections(
         },
         "cves": dict(sorted(cves.items())),
         "attack_techniques": dict(sorted(techniques.items())),
+        "tls_fingerprints": dict(sorted(named_fingerprints.items())),
         "flows": {
             str(number): flow_parts[flow_key] for flow_key, number in flow_numbers.items()
         },

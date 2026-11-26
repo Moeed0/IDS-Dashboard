@@ -20,7 +20,12 @@ finds those and reads what the database holds on them:
   and ATT&CK IDs);
 - a CVE: the NVD summary, publication date, CVSS, CWEs, EPSS and, when it is
   in CISA's Known Exploited Vulnerabilities catalog, its KEV entry;
-- a technique: its name, tactics, platforms and description.
+- a technique: its name, tactics, platforms and description;
+- a TLS fingerprint (the JA4, JA3 and JA3S in Suricata's ``tls`` and
+  ``quic`` output): the program it belongs to, from FoxIO's JA4+ mapping
+  (browsers, libraries, malware and attack tools) and abuse.ch's SSL
+  Blacklist of malware JA3s. Most fingerprints are in neither: the file's
+  ``tls_fingerprints`` gives the programs the lab named itself.
 
 Copy this one file to the LLM PC (Windows or Linux; Python 3.8 or newer, no
 packages) and run it there:
@@ -29,6 +34,7 @@ packages) and run it there:
     python intel_lookup.py enrich snort_suricata_combined_20261117_1651_last20.json
     python intel_lookup.py lookup snort_signature:1:31978:5 CVE-2014-6271 T1190
     python intel_lookup.py lookup 2009208 116:414
+    python intel_lookup.py lookup t13d1516h2_8daaf6152771_02713d6af862 b386946a5a44d1ddcc843bc75336dfce
 
 A rule can be named in full (``suricata_signature:1:2009208:4``) or by
 GID:SID:REV, GID:SID or SID alone: each rule of either engine with that
@@ -67,6 +73,13 @@ _RULE_RE = re.compile(r"\b(snort|suricata)_signature:(\d+):(\d+):(\d+)\b")
 _PLAIN_RULE_RE = re.compile(r"(?:(\d+):)?(\d+)(?::(\d+))?")
 # Talos's explanation: a description, then these sections.
 _TALOS_SECTION_RE = re.compile(r"(?:^|\n)[ \t]*(Impact|Details|Ease of Attack):[ \t]*")
+# TLS fingerprints: a JA4 (t13d1516h2_8daaf6152771_02713d6af862, q… for
+# QUIC), Suricata's JA3 and JA3S objects ({"hash": "…", "string": "…"}),
+# and the combined file's ja3:<hash> and ja3s:<hash> names.
+_JA4_RE = re.compile(r"\b[tqd][0-9a-z]{2}[di]\d{4}[0-9a-z]{2}_[0-9a-f]{12}_[0-9a-f]{12}\b")
+_JA3_OBJECT_RE = re.compile(r'"(ja3s?)"\s*:\s*\{\s*"hash"\s*:\s*"([0-9a-f]{32})"')
+_JA3_NAMED_RE = re.compile(r"\b(ja3s?):([0-9a-f]{32})\b")
+_FINGERPRINT_RE = re.compile(r"(?:(ja3s?):)?([0-9a-fA-F]{32})")
 # ATT&CK's citations and Markdown links.
 _CITATION_RE = re.compile(r"\(Citation:[^)]*\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
@@ -88,11 +101,56 @@ def named(text: str) -> dict[str, list[str]]:
     cves = {f"CVE-{year}-{number}" for year, number in _CVE_RE.findall(text)}
     cves |= {f"CVE-{year}-{number}" for year, number in _CVE_REFERENCE_RE.findall(text)}
     rules = {match.group(0) for match in _RULE_RE.finditer(text)}
+    fingerprints = set(_JA4_RE.findall(text))
+    fingerprints |= {f"{kind}:{value}" for kind, value in _JA3_OBJECT_RE.findall(text)}
+    fingerprints |= {f"{kind}:{value}" for kind, value in _JA3_NAMED_RE.findall(text)}
     return {
         "rules": sorted(rules, key=lambda rule: [int(part) if part.isdigit() else part for part in rule.split(":")]),
         "cves": sorted(cves),
         "attack_techniques": sorted(set(_TECHNIQUE_RE.findall(text))),
+        "tls_fingerprints": sorted(fingerprints),
     }
+
+
+def fingerprint_name(given: str) -> str | None:
+    """A TLS fingerprint as the lookups name it (a JA4, ja3:<hash> or
+    ja3s:<hash>; a bare 32-digit hash is taken as a JA3), or None."""
+    given = given.strip()
+    if _JA4_RE.fullmatch(given.lower()):
+        return given.lower()
+    match = _FINGERPRINT_RE.fullmatch(given)
+    if match and not given.isdigit():
+        return f"{(match.group(1) or 'ja3').lower()}:{match.group(2).lower()}"
+    return None
+
+
+def fingerprint_details(connection: sqlite3.Connection, name: str) -> list[dict[str, Any]] | None:
+    """What the database's sources say of a TLS fingerprint (fingerprint_name
+    form), one entry per source's record; None when none knows it."""
+    if not _has_table(connection, "tls_fingerprint_intel"):
+        return None
+    kind, _, value = name.partition(":") if name.startswith(("ja3:", "ja3s:")) else ("", "", name)
+    query = "SELECT * FROM tls_fingerprint_intel WHERE fingerprint = ?"
+    values = [value]
+    if kind:
+        query += " AND kind = ?"
+        values.append(kind)
+    rows = connection.execute(query + " ORDER BY source, application", values).fetchall()
+    found = [
+        _without_empty({
+            "kind": row["kind"],
+            "application": row["application"],
+            "library": row["library"],
+            "device": row["device"],
+            "os": row["os"],
+            "notes": row["notes"],
+            "first_seen": row["first_seen"],
+            "last_seen": row["last_seen"],
+            "source": row["source"],
+        })
+        for row in rows
+    ]
+    return found or None
 
 
 def _without_empty(value: Any) -> Any:
@@ -336,12 +394,23 @@ def lookup(db: Path, ids: Iterable[str]) -> dict[str, Any]:
         raise SystemExit(f"No database at {db}: run `python {Path(__file__).name} download <dashboard URL>` first")
     connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
-    found: dict[str, Any] = {"rules": {}, "cves": {}, "attack_techniques": {}, "unknown": []}
+    found: dict[str, Any] = {
+        "rules": {}, "cves": {}, "attack_techniques": {}, "tls_fingerprints": {},
+        "unknown": [], "unknown_fingerprints": [],
+    }
     try:
         wanted = [given.strip() for given in ids if given.strip()]
         cves: list[str] = []
         techniques: list[str] = []
         for given in wanted:
+            fingerprint = fingerprint_name(given)
+            if fingerprint is not None:
+                details = fingerprint_details(connection, fingerprint)
+                if details is None:
+                    found["unknown_fingerprints"].append(fingerprint)
+                else:
+                    found["tls_fingerprints"][fingerprint] = details
+                continue
             plain = _PLAIN_RULE_RE.fullmatch(given) is not None
             if plain or _RULE_RE.fullmatch(given):
                 names = rules_named(connection, given) if plain else [given]
@@ -385,7 +454,7 @@ def enrich(db: Path, combined: str | Mapping[str, Any]) -> dict[str, Any]:
     file (its JSON text, or the parsed document) names."""
     text = combined if isinstance(combined, str) else json.dumps(combined)
     ids = named(text)
-    return lookup(db, [*ids["rules"], *ids["cves"], *ids["attack_techniques"]])
+    return lookup(db, [*ids["rules"], *ids["cves"], *ids["attack_techniques"], *ids["tls_fingerprints"]])
 
 
 _SOURCE_NAMES = {
@@ -394,6 +463,13 @@ _SOURCE_NAMES = {
     "snort_builtin_docs": "Snort built-in rule descriptions",
     "snort_builtin_rules": "Snort built-in rules",
     "suricata_rule_docs": "Suricata rules",
+    "foxio_ja4plus_mapping": "FoxIO JA4+ mapping",
+    "sslbl_ja3": "abuse.ch SSL Blacklist JA3s",
+}
+_FINGERPRINT_KINDS = {
+    "ja4": "JA4, TLS/QUIC client", "ja4s": "JA4S, TLS server", "ja4h": "JA4H, HTTP client",
+    "ja4x": "JA4X, X.509 certificate", "ja4t": "JA4T, TCP client", "ja4tscan": "JA4TScan, TCP server",
+    "ja3": "JA3, TLS client",
 }
 
 
@@ -521,9 +597,25 @@ def as_text(found: Mapping[str, Any]) -> str:
             lines.append(f"  Platforms: {', '.join(details['platforms'])}")
         if details.get("description"):
             lines.append(f"  Description: {details['description']}")
+    for fingerprint, records in found.get("tls_fingerprints", {}).items():
+        for record in records:
+            what = ", ".join(
+                f"{label}: {record[key]}" for key, label in (
+                    ("application", "program"), ("library", "library"), ("device", "device"), ("os", "OS"),
+                ) if record.get(key)
+            )
+            lines += ["", f"TLS fingerprint {fingerprint} ({_FINGERPRINT_KINDS.get(record.get('kind'), record.get('kind'))}): "
+                      f"{what or 'no program named'} ({_SOURCE_NAMES.get(record.get('source'), record.get('source'))})"]
+            if record.get("first_seen") or record.get("last_seen"):
+                lines.append(f"  Seen from {record.get('first_seen', '?')} to {record.get('last_seen', '?')}")
+            if record.get("notes"):
+                lines.append(f"  Notes: {record['notes']}")
     if found.get("unknown"):
         lines += ["", f"Not in the database: {', '.join(found['unknown'])}"]
-    if not (found.get("rules") or found.get("cves") or found.get("attack_techniques")):
+    if found.get("unknown_fingerprints"):
+        lines += ["", "TLS fingerprints neither FoxIO's JA4+ mapping nor abuse.ch's SSL Blacklist lists: "
+                  + ", ".join(found["unknown_fingerprints"])]
+    if not (found.get("rules") or found.get("cves") or found.get("attack_techniques") or found.get("tls_fingerprints")):
         lines += ["", "The database holds nothing on this file's rules: no rule documentation, CVEs or ATT&CK techniques."]
     return "\n".join(lines).strip() + "\n"
 

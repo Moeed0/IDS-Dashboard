@@ -1,4 +1,4 @@
-# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.2)
+# Combined Snort + Suricata JSON (schema `ids.combined-detections` 14.3)
 
 Built in the **Alert Explorer** from the alerts its filters choose ("Download
 JSON", or "Send" to the LLM PC), or by the API for a whole time window (5
@@ -52,10 +52,26 @@ in every file.
 | `alerts` | How many alerts each engine raised in the window; an engine that raised none is left out (`{"snort": 3}`). |
 | `ids_output` | Per engine: the output fields every one of its alerts in the file has with the same value, given once (`{"snort": {"iface": "ens34", …}}`, 13.0). Never a rule's details: those are in `rules`. See The IDS output in parts. |
 | `rules` | Each rule that fired in the window, once: its IDS output fields and its rule text. |
+| `tls_fingerprints` | The programs people in the lab named the TLS fingerprints the file's Suricata alerts carry (14.3): `{"t13d1516h2_8daaf6152771_02713d6af862": {"app": "Chrome", "note": "…"}}`. See TLS fingerprints. |
 | `flows` | Each connection with output the same on every alert of an engine on it, once, by number. |
 | `packets` | The packets the engines alerted on, oldest first. |
 
-`flows` is left out when it would be empty.
+`flows` and `tls_fingerprints` are left out when they would be empty.
+
+### TLS fingerprints
+
+Suricata adds each TLS connection's fingerprints to its alerts on it, in its
+own output's `tls` part (`quic` for QUIC): `ja4`, `ja3` (`hash` and
+`string`) and `ja3s`, beside the site (`sni`) and the ALPNs. They name the
+program that opened the connection, never what it sent. Snort makes no
+fingerprints, so its alerts carry none. The lab names the programs on the
+dashboard's TLS Fingerprints page (or with `scripts/tls_fingerprints.py`);
+`tls_fingerprints` gives the names of the file's fingerprints, keyed by the
+JA4 as Suricata writes it, the JA3 as `ja3:<hash>` and the JA3S as
+`ja3s:<hash>`. A fingerprint nobody has named is not listed. Suricata's own
+alerts on fingerprints (`deploy/suricata/tls-fingerprints/tls-fingerprints.rules`,
+SIDs 1000101-1000108) are like any other: a client fingerprint new on the
+network, new for a device, or on the lab's known-bad lists.
 
 ### Window end
 
@@ -327,6 +343,50 @@ from files on the IDS machine:
 ET Open's Suricata rules have no such documentation; a rule of your own
 (`local.rules`) has none either.
 
+And which program a TLS fingerprint is, in `tls_fingerprint_intel` (one row
+per fingerprint a source lists, with its kind: `ja4`, `ja4s`, `ja4h`,
+`ja4x`, `ja4t`, `ja4tscan` or `ja3`):
+
+- FoxIO's JA4+ mapping, `ja4plus-mapping.csv` in FoxIO's JA4 repository
+  (77 fingerprints: Chromium, Firefox and Safari, Python and Go, curl,
+  Telegram, and malware and attack tools such as Cobalt Strike, Sliver,
+  IcedID, Qakbot and Lumma). The full JA4+ database at ja4db.foxio.io is
+  bigger, but exporting it needs a paid account;
+- abuse.ch's SSL Blacklist of JA3s seen in malware's TLS traffic (97, each
+  with the malware family and when it was seen; the list was last updated
+  in August 2021). A JA3 can be shared with ordinary software.
+
+And which service (app) a site name belongs to, in `site_services` (`domain`,
+`match`, `service`): v2fly's domain-list-community (MIT licence), its
+GitHub repository as one archive (about 0.4 MB, read without unpacking it):
+one list per service of the names it uses, such as YouTube's youtube.com,
+googlevideo.com and ytimg.com. `match` is `domain` for the name and every
+name under it, `full` for that name only. Its lists of kinds of sites
+(`category-*`, `geolocation-*`, `tld-*`, `private`, `cn`) and its
+`include:`, `keyword:` and `regexp:` lines are left out. A service's name is
+its list's, words capitalized ("google-play": "Google Play"). The dashboard's
+TLS Fingerprints page names each site's service by the longest name the
+list has for it (`play.google.com` is Google Play's, `mail.google.com`
+Google's).
+
+And which network owns each IP address, in `ip_owners` (`range_start`,
+`range_end`, `asn`, `country`, `description`): iptoasn.com's
+`ip2asn-combined.tsv.gz` (public domain, PDDL 1.0; about 11 MB, IPv4 and
+IPv6, updated hourly there). Each range's ends are keyed as the address's
+version then the address as 32 hex digits, so that text order is address
+order; ranges no one routes (AS 0) are left out. The dashboard names an
+alert's server by it when nothing in the traffic names it (its short name:
+the AS's name without its handle and legal form, "FACEBOOK - Facebook,
+Inc." giving "Facebook").
+
+`scripts/download_intel_sources.py` fetches all four (about 12 MB); only
+them, into the existing database:
+
+    .venv/bin/python scripts/download_intel_sources.py --fingerprints-only
+
+Most fingerprints are in neither list; the file's `tls_fingerprints` gives
+the programs the lab named itself.
+
 On the LLM PC, `scripts/intel_lookup.py` (standard library only) fetches the
 database and writes what it says of a file as plain text, to put in the
 LLM's prompt:
@@ -334,12 +394,14 @@ LLM's prompt:
     python intel_lookup.py download http://172.16.20.142:8501/
     python intel_lookup.py enrich snort_suricata_combined_….json
     python intel_lookup.py lookup snort_signature:1:31978:5 CVE-2014-6271 T1190
+    python intel_lookup.py lookup t13d1516h2_8daaf6152771_02713d6af862
 
 or, from a program, `prompt_text(db, combined_json)`. It finds every rule the
 file names and the CVEs (a rule text's `reference:cve,2014-6271`, Suricata's
 metadata `CVE_2014_6271`, a message's `CVE-2020-11899`) and ATT&CK
 techniques (Suricata's `mitre_technique_id`) it names, plus those a rule's
-Talos documentation names, and gives:
+Talos documentation names, and the TLS fingerprints in Suricata's output
+(`ja4`, `ja3.hash`, `ja3s.hash`) and in `tls_fingerprints`, and gives:
 
 - a built-in Snort rule's description, from Snort;
 - a Snort rule's Talos documentation: category (described once), description,
@@ -347,7 +409,10 @@ Talos documentation names, and gives:
   usage, vulnerability type, CVEs and technique; the parts that repeat
   another or copy a CVE's NVD summary or scores are left out;
 - a CVE's NVD summary, publication date, CVSS, CWEs, EPSS and CISA KEV entry;
-- a technique's name, tactics, platforms and description.
+- a technique's name, tactics, platforms and description;
+- a TLS fingerprint's program, library, device or OS and notes, from FoxIO's
+  JA4+ mapping or abuse.ch's SSL Blacklist (malware family and when it was
+  seen), and which of the file's fingerprints neither lists.
 
 `--json` prints the same as JSON.
 

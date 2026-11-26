@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ruleEntry } from "./AlertDetail";
+import { RawOutput, ruleEntry } from "./AlertDetail";
 import { SeverityCircles, arrived, filledCircles, packetKey, packetShades, tableRequest } from "./AlertExplorer";
 import type { AlertRow } from "./api";
 
@@ -92,5 +92,22 @@ describe("tableRequest", () => {
 
   it("asks each side-by-side table for its own engine", () => {
     expect(tableRequest({ last: 20 }, "suricata", 1)).toEqual({ last: 20, engine: "suricata", page: 1 });
+  });
+});
+
+describe("RawOutput", () => {
+  it("shows each engine's record whole, this alert's first, with where the engine wrote it", () => {
+    const records = [
+      { id: 2, engine: "suricata" as const, uid: "01M6002", record: { alert: { signature_id: 2001119 }, event_type: "alert" } },
+      { id: 1, engine: "snort" as const, uid: "01M6001", record: { sid: 254, gid: 1 } },
+    ];
+    const html = renderToStaticMarkup(<RawOutput records={records} current={2} />);
+
+    expect(html).toContain("Suricata · this alert");
+    expect(html).toContain("/var/log/suricata/eve.json");
+    expect(html).toContain("Snort · 01M6001");
+    expect(html).toContain("/var/log/snort/alert_json.txt");
+    expect(html.indexOf("2001119")).toBeLessThan(html.indexOf("254"));
+    expect(html).toContain("&quot;signature_id&quot;: 2001119");
   });
 });
