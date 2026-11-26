@@ -39,12 +39,12 @@ sed "s/-i ens38 /-i $IFACE /" "$PROJECT_DIR/deploy/systemd/snort-lab.service.d/d
 sudo install -d /var/log/snort
 # Snort's logs (alert_json.txt, and the extractor's TLS connections) are
 # readable by this folder's owner, who runs the collector. Snort creates a
-# file readable by root only, but keeps an existing file's permissions when
-# it truncates it on starting, so each is made here first.
+# file readable by root only, but keeps an existing file's permissions, so
+# each is made here first.
 owner="$(stat -c %U "$PROJECT_DIR")"
 sudo setfacl -m "u:$owner:rx" /var/log/snort
 sudo setfacl -d -m "u:$owner:r" /var/log/snort
-for log in /var/log/snort/alert_json.txt /var/log/snort/file_connector_tls_transmit; do
+for log in /var/log/snort/alert_json.txt /var/log/snort/extractor_tls.json; do
     sudo touch "$log"
     sudo chmod 0640 "$log"
     sudo setfacl -m "u:$owner:r" "$log"

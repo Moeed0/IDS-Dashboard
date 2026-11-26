@@ -302,13 +302,15 @@ alert_json =
 -- the site the client asked for (SNI), the TLS version, cipher and curve,
 -- and the certificate's subject and issuer (TLS 1.2: TLS 1.3 encrypts the
 -- certificate). One JSON line per connection in
--- /var/log/snort/file_connector_tls_transmit, which the collector stores
+-- /var/log/snort/extractor_tls.json, which the collector stores
 -- so that the dashboard checks each alert's site against Suricata's
--- (src/ids/snort_tls.py). Snort truncates the file when it starts. No QUIC:
--- this Snort has no QUIC inspector, so QUIC is Suricata's alone.
-file_connector =
+-- (src/ids/snort_tls.py). std_connector with buffer_size 0 writes each line
+-- as it comes and adds to the file when Snort restarts (file_connector
+-- held its lines back 8 KB at a time and emptied the file on starting).
+-- No QUIC: this Snort has no QUIC inspector, so QUIC is Suricata's alone.
+std_connector =
 {
-    { connector = 'tls_log', name = 'tls', direction = 'transmit', text_format = true },
+    { connector = 'tls_log', direction = 'transmit', redirect = 'extractor_tls.json', buffer_size = 0 },
 }
 extractor =
 {

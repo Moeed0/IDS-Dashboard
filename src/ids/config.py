@@ -224,7 +224,7 @@ def get_settings() -> Settings:
         ),
         snort_tls_file=_path_from_env(
             "IDS_SNORT_TLS_FILE",
-            "/var/log/snort/file_connector_tls_transmit",
+            "/var/log/snort/extractor_tls.json",
         ),
         suricata_eve_file=_path_from_env(
             "IDS_SURICATA_EVE_FILE",

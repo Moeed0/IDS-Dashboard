@@ -4,7 +4,7 @@
 # (alert_json.txt.1, or the .gz copies after a longer stop), then the new
 # lines from the start (src/ids/rotated_logs.py). perf_monitor
 # rolls its own file (perf_monitor.max_file_size).
-/var/log/snort/alert_json.txt /var/log/snort/file_connector_tls_transmit {
+/var/log/snort/alert_json.txt /var/log/snort/extractor_tls.json {
     weekly
     rotate 8
     missingok

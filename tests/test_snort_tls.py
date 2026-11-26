@@ -119,7 +119,7 @@ def test_the_site_is_checked_against_snort_s_record(tmp_path):
 def test_the_collector_stores_snort_s_tls_log_and_a_snort_alert_is_named_by_it(monkeypatch, tmp_path):
     from ids.dashboard_data import alert_detail, alerts
 
-    tls_log = tmp_path / "file_connector_tls_transmit"
+    tls_log = tmp_path / "extractor_tls.json"
     tls_log.write_text(TLS12 + "\nnot json\n" + TLS13 + "\n")
     monkeypatch.setenv("IDS_DB_FILE", str(_database(tmp_path)))
     monkeypatch.setenv("IDS_STATE_FILE", str(tmp_path / "state.json"))

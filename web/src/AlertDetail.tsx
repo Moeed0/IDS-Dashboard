@@ -40,7 +40,7 @@ export function ruleEntry(rules: AlertDetails["rules"], alert: AlertRow): Record
 const LOGS: Record<string, string> = {
   snort: "/var/log/snort/alert_json.txt",
   suricata: "/var/log/suricata/eve.json",
-  snort_tls: "/var/log/snort/file_connector_tls_transmit",
+  snort_tls: "/var/log/snort/extractor_tls.json",
 };
 
 /** The records, one engine's after another's, as indented JSON or as the one

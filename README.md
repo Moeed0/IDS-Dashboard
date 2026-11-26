@@ -380,7 +380,7 @@ malware), never what it sends. With `sudo deploy/apply-suricata-settings.sh`
   not necessarily the app. A name given with `scripts/tls_fingerprints.py
   --label` comes first; the combined JSON gives that name with it;
 - Snort's extractor (`deploy/snort/snort.lua`) writes its own record of
-  each TLS connection to `/var/log/snort/file_connector_tls_transmit` (the
+  each TLS connection to `/var/log/snort/extractor_tls.json` (the
   site, the TLS version, cipher and curve, the certificate's subject and
   issuer), which the collector keeps (`snort_tls`, `src/ids/snort_tls.py`)
   to check alerts with: an alert on a connection both engines named the

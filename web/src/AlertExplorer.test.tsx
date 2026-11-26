@@ -120,7 +120,7 @@ describe("RawOutput", () => {
 
     expect(html).toContain("Snort · this alert");
     expect(html).toContain("Snort · the TLS connection");
-    expect(html).toContain("/var/log/snort/file_connector_tls_transmit");
+    expect(html).toContain("/var/log/snort/extractor_tls.json");
     expect(html).toContain("www.youtube.com");
   });
 });
