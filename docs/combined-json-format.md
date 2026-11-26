@@ -362,9 +362,12 @@ GitHub repository as one archive (about 0.4 MB, read without unpacking it):
 one list per service of the names it uses, such as YouTube's youtube.com,
 googlevideo.com and ytimg.com. `match` is `domain` for the name and every
 name under it, `full` for that name only. Its lists of kinds of sites
-(`category-*`, `geolocation-*`, `tld-*`, `private`, `cn`) and its
-`include:`, `keyword:` and `regexp:` lines are left out. A service's name is
-its list's, words capitalized ("google-play": "Google Play"). The dashboard's
+(`category-*`, `geolocation-*`, `tld-*`, `private`, `cn`), its lists of
+the domain endings a company sells (`google-registry-tld`: `.app`, `.dev`…)
+and its `include:`, `keyword:` and `regexp:` lines are left out. A service's
+name is its list's, words capitalized ("google-play": "Google Play"), except
+for brands written with their own capitals ("whatsapp": "WhatsApp", "aws":
+"AWS") or better known by another name ("qcloud": "Tencent Cloud"). The dashboard's
 TLS Fingerprints page names each site's service by the longest name the
 list has for it (`play.google.com` is Google Play's, `mail.google.com`
 Google's).

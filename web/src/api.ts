@@ -194,7 +194,7 @@ export interface AlertRow {
   /** Both engines alerted on its packet. */
   both: boolean;
   /** For a Suricata alert on a TLS or QUIC connection: its program and the
-   * service of its site, each name once ("Chromium Browser · Youtube"); for
+   * service of its site, each name once ("Chromium Browser · YouTube"); for
    * any alert to or from an address a TLS handshake went to, the service of
    * the sites seen there, ending in "?" ("Instagram?"). */
   names?: string;

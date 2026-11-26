@@ -17,7 +17,7 @@ describe("Services", () => {
       <Services
         row={row(
           [
-            { name: "Youtube", sites: ["i.ytimg.com", "www.youtube.com", "a.googlevideo.com", "b.googlevideo.com"] },
+            { name: "YouTube", sites: ["i.ytimg.com", "www.youtube.com", "a.googlevideo.com", "b.googlevideo.com"] },
             { name: null, sites: ["lab.local"] },
           ],
           { name: "Chromium Browser", source: "FoxIO's JA4+ mapping", malware: false },
@@ -26,11 +26,11 @@ describe("Services", () => {
     );
 
     expect(html.match(/Chromium Browser/g)).toHaveLength(1);
-    expect(html.match(/Youtube/g)).toHaveLength(1);
+    expect(html.match(/YouTube/g)).toHaveLength(1);
     expect(html).toContain("from FoxIO&#x27;s JA4+ mapping");
     expect(html).toContain("i.ytimg.com, www.youtube.com, a.googlevideo.com (+1)");
-    expect(html.indexOf("Chromium Browser")).toBeLessThan(html.indexOf("Youtube"));
-    expect(html.indexOf("Youtube")).toBeLessThan(html.indexOf("lab.local"));
+    expect(html.indexOf("Chromium Browser")).toBeLessThan(html.indexOf("YouTube"));
+    expect(html.indexOf("YouTube")).toBeLessThan(html.indexOf("lab.local"));
   });
 
   it("leaves out a service named the same as the program", () => {

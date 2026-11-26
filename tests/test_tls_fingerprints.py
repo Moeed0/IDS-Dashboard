@@ -264,6 +264,8 @@ SITE_LISTS = {
     "google-play": "play.google.com @ads\n",
     "example": "domain:example.com\n",
     "instagram": "instagram.com\n",
+    "whatsapp": "whatsapp.net\n",
+    "google-registry-tld": "app\ndev\n",
     "category-ads-all": "include:youtube\ndoubleclick.net @ads\n",
     "geolocation-!cn": "include:google\n",
 }
@@ -318,16 +320,16 @@ def _intel_db(tmp_path):
     # youtube 5, google 3, connectivity-check 1, google-play 1, example 1, instagram 1;
     # the category and geolocation lists, include:, keyword: and regexp: left out.
     # The not-routed range and the broken line left out.
-    assert counts == {"tls_fingerprint_intel": 7, "site_services": 12, "ip_owners": 4}
+    assert counts == {"tls_fingerprint_intel": 7, "site_services": 13, "ip_owners": 4}
     return db
 
 
 def test_each_site_is_named_by_the_service_of_the_longest_name_the_list_has(tmp_path):
     intel = Intel(_intel_db(tmp_path))
 
-    assert intel.services("WWW.YouTube.com.") == ["Youtube"]
-    assert intel.services("rr3---sn-a5mekn6s.googlevideo.com") == ["Youtube"]
-    assert intel.services("anything.youtube") == ["Youtube"]
+    assert intel.services("WWW.YouTube.com.") == ["YouTube"]
+    assert intel.services("rr3---sn-a5mekn6s.googlevideo.com") == ["YouTube"]
+    assert intel.services("anything.youtube") == ["YouTube"]
     # play.google.com is Google Play's, not Google's; the rest of google.com is Google's.
     assert intel.services("play.google.com") == ["Google Play"]
     assert intel.services("mail.google.com") == ["Google"]
@@ -336,6 +338,10 @@ def test_each_site_is_named_by_the_service_of_the_longest_name_the_list_has(tmp_
     # full: is that name only; the rest of gstatic.com is Google's by domain.
     assert intel.services("fonts.gstatic.com") == ["Google"]
     assert intel.services("ads.doubleclick.net") == []
+    # The domain endings Google sells are no service's: a .app site is anyone's.
+    assert intel.services("project.firebasedatabase.app") == []
+    # A brand is written with its own capitals.
+    assert intel.services("api.whatsapp.net") == ["WhatsApp"]
     assert intel.services("") == []
     intel.close()
 
@@ -357,7 +363,7 @@ def test_the_list_names_each_program_and_each_service_once(tmp_path):
     # FoxIO lists the JA4 (as Python): its name, before the BitRAT JA3 seen with it.
     assert first["known_app"] == {"name": "Python", "source": "FoxIO's JA4+ mapping", "malware": False}
     # Two sites, one service: named once.
-    assert first["services"] == [{"name": "Youtube", "sites": ["i.ytimg.com", "www.youtube.com"]}]
+    assert first["services"] == [{"name": "YouTube", "sites": ["i.ytimg.com", "www.youtube.com"]}]
     other = listed[("192.168.50.121", OTHER)]
     # In neither list.
     assert other["known_app"] is None
@@ -398,7 +404,7 @@ def test_an_alert_on_a_tls_connection_names_its_program_and_service(tmp_path):
         "fingerprint": CHROME_LIKE,
         "program": {"name": "Python", "source": "FoxIO's JA4+ mapping", "malware": False},
         "site": "i.ytimg.com",
-        "service": "Youtube",
+        "service": "YouTube",
     }
     # A name given in the lab comes first.
     named = connection_names(alert, labels={CHROME_LIKE: {"app": "Chrome", "note": None}}, intel=intel)
@@ -415,7 +421,7 @@ def test_an_alert_on_a_tls_connection_names_its_program_and_service(tmp_path):
 
 def test_a_short_name_writes_each_name_once():
     program = {"name": "Chromium Browser", "source": "x", "malware": False}
-    assert short_name({"program": program, "service": "Youtube", "site": "i.ytimg.com"}) == "Chromium Browser · Youtube"
+    assert short_name({"program": program, "service": "YouTube", "site": "i.ytimg.com"}) == "Chromium Browser · YouTube"
     assert short_name({"program": None, "service": None, "site": "i.golootlo.pk"}) == "i.golootlo.pk"
     assert short_name({"program": {**program, "name": "WhatsApp"}, "service": "Whatsapp", "site": "w.whatsapp.net"}) == "WhatsApp"
     assert short_name({"program": None, "service": None, "site": None}) is None
@@ -489,7 +495,7 @@ def test_an_alert_without_tls_details_is_named_by_its_servers_address(tmp_path):
     names = {row["message"]: row.get("names") for row in alerts(path, engines=("suricata",), intel_db=intel_db)["rows"]}
     # Instagram's sites only: named once, as probable.
     assert names["SURICATA STREAM RST recv but no session"] == "Instagram?"
-    assert names["SURICATA STREAM Packet with invalid ack"] == "Youtube?"
+    assert names["SURICATA STREAM Packet with invalid ack"] == "YouTube?"
     reset_id = next(row["id"] for row in alerts(path, engines=("suricata",))["rows"] if row["sid"] == 2210041)
     assert alert_detail(path, reset_id, rule_intelligence=None, intel_db=intel_db)["connection"] == {
         "fingerprint": None, "program": None, "site": "test-gateway.instagram.com", "service": "Instagram",

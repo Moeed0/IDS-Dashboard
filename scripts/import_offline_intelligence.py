@@ -65,8 +65,9 @@ CREATE INDEX idx_tls_fingerprint_intel ON tls_fingerprint_intel(fingerprint);
 # Which service (app) each site name belongs to: v2fly's domain-list-community
 # (MIT licence), one list per service of the names it uses ("youtube":
 # youtube.com, googlevideo.com, ytimg.com…). Its lists of kinds of sites
-# (category-*, geolocation-*, tld-*, private, cn) are left out: they name no
-# service. scripts/download_intel_sources.py fetches it.
+# (category-*, geolocation-*, tld-*, private, cn) and of the domain endings a
+# company sells (google-registry-tld: .app, .dev, .page…) are left out: they
+# name no service. scripts/download_intel_sources.py fetches it.
 DEFAULT_SITE_LIST_PATH = FINGERPRINT_SOURCES / "domain-list-community.tar.gz"
 SITE_SERVICES_SQL = """
 DROP TABLE IF EXISTS site_services;
@@ -97,6 +98,64 @@ CREATE TABLE ip_owners (
 _SITE_LIST_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.!-]*$")
 _SITE_DOMAIN_RE = re.compile(r"^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?$")
 _SITE_LIST_SKIPPED = ("category-", "geolocation-", "tld-")
+# Names whose capitals a list's name can't give ("whatsapp" → "WhatsApp"), and
+# lists better known by another name ("qcloud" → "Tencent Cloud"). Every other
+# list's name is written with each word capitalized ("google-play" → "Google
+# Play").
+_SERVICE_NAMES = {
+    "4chan": "4chan",
+    "adguard": "AdGuard",
+    "amd": "AMD",
+    "aws": "AWS",
+    "bbc": "BBC",
+    "bilibili": "bilibili",
+    "bmw": "BMW",
+    "bytedance": "ByteDance",
+    "cctv": "CCTV",
+    "cnn": "CNN",
+    "digitalocean": "DigitalOcean",
+    "dmm": "DMM",
+    "duckduckgo": "DuckDuckGo",
+    "ea": "EA",
+    "epicgames": "Epic Games",
+    "github": "GitHub",
+    "gitlab": "GitLab",
+    "google-deepmind": "Google DeepMind",
+    "googlefcm": "Google FCM",
+    "hbo": "HBO",
+    "hp": "HP",
+    "hoyoverse": "HoYoverse",
+    "ibm": "IBM",
+    "icloud": "iCloud",
+    "iqiyi": "iQIYI",
+    "jd": "JD",
+    "jetbrains": "JetBrains",
+    "lg": "LG",
+    "linkedin": "LinkedIn",
+    "mihoyo": "miHoYo",
+    "msn": "MSN",
+    "nvidia": "NVIDIA",
+    "nytimes": "New York Times",
+    "ok": "OK.ru",
+    "onedrive": "OneDrive",
+    "oneplus": "OnePlus",
+    "openai": "OpenAI",
+    "paypal": "PayPal",
+    "pikpak": "PikPak",
+    "playstation": "PlayStation",
+    "protonmail": "Proton Mail",
+    "pubg": "PUBG",
+    "qcloud": "Tencent Cloud",
+    "soundcloud": "SoundCloud",
+    "softbank": "SoftBank",
+    "tiktok": "TikTok",
+    "uc": "UC Browser",
+    "vk": "VK",
+    "whatsapp": "WhatsApp",
+    "wordpress": "WordPress",
+    "xbox": "Xbox",
+    "youtube": "YouTube",
+}
 _MAX_SITE_LIST_BYTES = 5_000_000
 # FoxIO's columns that hold a fingerprint, and the kind of each.
 _FOXIO_KINDS = ("ja4", "ja4s", "ja4h", "ja4x", "ja4t", "ja4tscan")
@@ -933,7 +992,10 @@ def _import_tls_fingerprints(
 
 
 def _service_name(list_name: str) -> str:
-    """A list's name as a service's: "google-play" → "Google Play"."""
+    """A list's name as a service's: "google-play" → "Google Play",
+    "whatsapp" → "WhatsApp"."""
+    if list_name in _SERVICE_NAMES:
+        return _SERVICE_NAMES[list_name]
     return " ".join(word.capitalize() for word in list_name.split("-") if word)
 
 
@@ -956,6 +1018,7 @@ def _import_site_services(connection: sqlite3.Connection, path: Path | None) -> 
                 or not parent.endswith("/data")
                 or not _SITE_LIST_NAME_RE.match(name)
                 or name.startswith(_SITE_LIST_SKIPPED)
+                or name.endswith("-tld")
                 or name in ("private", "cn")
                 or member.size > _MAX_SITE_LIST_BYTES
             ):
