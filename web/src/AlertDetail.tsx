@@ -3,7 +3,7 @@
 // fired, its text and what is known about it) and the engines' own output
 // for the packet, as the combined JSON gives them, and each alert's record as
 // its engine wrote it (GET /alerts/{id}).
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SeverityCircles } from "./AlertExplorer";
 import { NAMES, ruleName, useApi, type AlertDetails, type AlertRow, type RawRecord } from "./api";
 import { stamp } from "./time";
@@ -91,6 +91,40 @@ export function RawOutput({ records, current }: { records: RawRecord[]; current:
   );
 }
 
+type Connection = NonNullable<AlertDetails["connection"]>;
+
+/** The connection's client fingerprint (JA4, with its JA3), and whether
+ * the Client Hello read from the packet gives the same. */
+export function Fingerprint({ connection }: { connection: Connection }) {
+  const check = connection.packet_check;
+  if (!check) return <code>{connection.fingerprint}</code>;
+  return (
+    <>
+      <code title={check.ja4_r}>{check.ja4}</code>
+      {check.result === "same" && <span className="muted"> ✓ the same from the packet</span>}
+      {check.result === "added" && <span className="muted"> from the packet</span>}
+      <div className="muted" title={check.ja3_string}>
+        JA3 {check.ja3}
+      </div>
+      {check.result === "added" && (
+        <div className="muted">
+          {check.suricata_ja4
+            ? `Suricata's alert came before the Client Hello was all there (its JA4: ${check.suricata_ja4}); this is worked out from the Client Hello in its packets.`
+            : "Suricata's alert has no TLS details; this is worked out from the Client Hello in its packets."}
+        </div>
+      )}
+      {check.result === "differs" && (
+        <div className="differs">
+          Suricata&apos;s alert has {[check.suricata_ja4 && `JA4 ${check.suricata_ja4}`, check.suricata_ja3 && `JA3 ${check.suricata_ja3}`]
+            .filter(Boolean)
+            .join(", ")}
+          , not what the Client Hello in the packet gives
+        </div>
+      )}
+    </>
+  );
+}
+
 function Fact({ name, children }: { name: string; children: ReactNode }) {
   return (
     <>
@@ -116,12 +150,25 @@ export function AlertDetail({
   onUnauthorized: () => void;
 }) {
   const { data, error } = useApi<AlertDetails>(`/alerts/${id}`, {}, onUnauthorized);
+  const panel = useRef<HTMLElement>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
+    // A click anywhere outside the panel closes it, but on an alert's row,
+    // which opens that alert in it instead.
+    const onClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.isConnected) return;
+      if (panel.current?.contains(target) || target.closest(".alert-table tbody tr")) return;
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("click", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("click", onClick);
+    };
   }, [onClose]);
 
   // The last alert stays while the next one clicked is fetched.
@@ -135,7 +182,7 @@ export function AlertDetail({
     !!connection?.service && connection.service.toLowerCase() !== (connection.program?.name ?? "").toLowerCase();
 
   return (
-    <aside className="drawer" aria-label="Alert">
+    <aside className="drawer" aria-label="Alert" ref={panel}>
       <div className="drawer-head">
         {alert ? (
           <h2>
@@ -144,7 +191,7 @@ export function AlertDetail({
         ) : (
           <h2 className="muted">{error ? "" : "Loading…"}</h2>
         )}
-        <button type="button" title="Close (Esc)" aria-label="Close" onClick={onClose}>
+        <button type="button" title="Close (Esc, or click outside)" aria-label="Close" onClick={onClose}>
           ✕
         </button>
       </div>
@@ -216,6 +263,11 @@ export function AlertDetail({
                   Probably: nothing in this traffic names it, so this is who owns {connection.server}, the network the
                   server runs on, not necessarily the app.
                 </div>
+              </Fact>
+            )}
+            {(connection?.packet_check || connection?.fingerprint) && (
+              <Fact name="Fingerprint">
+                <Fingerprint connection={connection} />
               </Fact>
             )}
             {connection?.encryption && (

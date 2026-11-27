@@ -178,6 +178,10 @@ echo "== Logs readable by root and $owner only"
 install -d /etc/systemd/system/suricata.service.d
 install -m 0644 "$repo_dir/deploy/systemd/suricata.service.d/log-access.conf" \
     /etc/systemd/system/suricata.service.d/log-access.conf
+# Time to load its rules, when a rule change means building its pattern
+# cache again (timeouts.conf).
+install -m 0644 "$repo_dir/deploy/systemd/suricata.service.d/timeouts.conf" \
+    /etc/systemd/system/suricata.service.d/timeouts.conf
 systemctl daemon-reload
 chmod 0750 "$logs"
 find "$logs" -maxdepth 1 -type f -exec chmod 0640 {} +

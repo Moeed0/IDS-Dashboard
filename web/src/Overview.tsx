@@ -1,14 +1,19 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import {
   NAMES,
   byEngine,
   count,
+  errorText,
   machineTime,
+  offState,
   ruleName,
+  setRuleOff,
   useApi,
   useNow,
   useRemembered,
   type Engine,
+  type RuleOff,
+  type RulesOff,
   type LiveData,
   type OffPeriod,
   type Options,
@@ -109,14 +114,72 @@ function offInside(off: OffPeriod[] = [], startMs: number, endMs: number): numbe
   return off.reduce((total, [from, to]) => total + Math.max(0, Math.min(to, endMs) - Math.max(from, startMs)), 0);
 }
 
-function RuleTable({ engine, rules, onSearch }: { engine: Engine; rules: TopRule[]; onSearch: (text: string) => void }) {
+// The rules ticked as false positives are fetched this often, to show
+// when the engines have taken them.
+const RULES_OFF_REFRESH_MS = 5_000;
+// Waiting this long for the engines suggests root's ids-rules-off isn't
+// installed.
+const RULES_OFF_SLOW_MS = 5 * 60 * 1000;
+
+type Ticking = {
+  data: RulesOff | null;
+  error: string;
+  /** Ticks (or unticks) a rule, after asking. */
+  toggle: (rule: { engine: Engine; gid: number; sid: number; message: string; rule: string }, off: boolean) => void;
+};
+
+/** The rules ticked as false positives: the list, refreshed, and a way to
+ * tick and untick, whose answer shows at once. */
+function useRulesOff(onUnauthorized: () => void): Ticking {
+  const fetched = useApi<RulesOff>("/rules-off", {}, onUnauthorized, RULES_OFF_REFRESH_MS);
+  const [saved, setSaved] = useState<{ data: RulesOff; at: number } | null>(null);
+  const [error, setError] = useState("");
+  const data = saved && (!fetched.receivedMs || saved.at >= fetched.receivedMs) ? saved.data : fetched.data;
+  const toggle: Ticking["toggle"] = (rule, off) => {
+    const question = off
+      ? `Turn off ${NAMES[rule.engine]} rule ${rule.rule} as a false positive?\n\n${rule.message}\n\n` +
+        `${NAMES[rule.engine]} stops raising it within a minute or two, until you tick it back on.`
+      : `Turn ${NAMES[rule.engine]} rule ${rule.rule} back on?\n\n${rule.message}`;
+    if (!window.confirm(question)) return;
+    setError("");
+    setRuleOff(rule, off)
+      .then((answer) => setSaved({ data: answer, at: Date.now() }))
+      .catch((reason: unknown) => setError(errorText(reason)));
+  };
+  return { data, error: error || fetched.error, toggle };
+}
+
+const OFF_WORDS = {
+  off: "Off",
+  applying: "Turning off…",
+  error: "Not turned off",
+  restoring: "Turning back on…",
+};
+
+function RuleTable({
+  engine,
+  rules,
+  onSearch,
+  ticking,
+}: {
+  engine: Engine;
+  rules: TopRule[];
+  onSearch: (text: string) => void;
+  ticking: Ticking;
+}) {
   // A bar behind each count, as long as its share of the busiest rule's.
   const most = Math.max(1, ...rules.map((rule) => rule.alerts));
+  const canTick = !!ticking.data?.enabled;
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
+            {canTick && (
+              <th className="tick" title="False positive: tick to turn the rule off in its engine, untick to turn it back on">
+                FP
+              </th>
+            )}
             <th className="rule" title="GID:SID:Rev">
               Rule
             </th>
@@ -125,8 +188,28 @@ function RuleTable({ engine, rules, onSearch }: { engine: Engine; rules: TopRule
           </tr>
         </thead>
         <tbody>
-          {rules.map((rule) => (
-            <tr key={`${rule.rule}:${rule.rev}`}>
+          {rules.map((rule) => {
+            const { gid, sid } = rule;
+            const known = gid !== null && sid !== null;
+            const state = known && ticking.data ? offState({ engine, gid, sid }, ticking.data) : null;
+            const ticked = state === "off" || state === "applying" || state === "error";
+            return (
+            <tr key={`${rule.rule}:${rule.rev}`} className={state === "off" ? "ruled-off" : undefined}>
+              {canTick && (
+                <td className="tick">
+                  {known && (
+                    <input
+                      type="checkbox"
+                      checked={ticked}
+                      title={state ? OFF_WORDS[state] : "False positive: turn this rule off"}
+                      aria-label={`False positive: turn ${ruleName(rule)} off`}
+                      onChange={(event) =>
+                        ticking.toggle({ engine, gid, sid, message: rule.message, rule: `${gid}:${sid}` }, event.target.checked)
+                      }
+                    />
+                  )}
+                </td>
+              )}
               <td className="rule">
                 <button type="button" className="link" title="Show its alerts in the Alert Explorer" onClick={() => onSearch(ruleName(rule))}>
                   {ruleName(rule)}
@@ -139,10 +222,12 @@ function RuleTable({ engine, rules, onSearch }: { engine: Engine; rules: TopRule
                 {count(rule.alerts)}
               </td>
               <td className="message" title={rule.message}>
+                {state && <span className={`off-state ${state}`}>{OFF_WORDS[state]}</span>}
                 {rule.message}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -166,6 +251,7 @@ export function Overview({
     options.default_top_rules_length,
     options.export_lengths,
   );
+  const ticking = useRulesOff(onUnauthorized);
   const { data, error } = useApi<OverviewData>(
     "/overview",
     { step_minutes: step, top_rules_length: topLength },
@@ -315,11 +401,107 @@ export function Overview({
             {byEngine(top.rules).map(([engine, rules]) => (
               <div key={engine}>
                 <h3>{NAMES[engine]}</h3>
-                {rules.length ? <RuleTable engine={engine} rules={rules} onSearch={onSearch} /> : <p className="muted">None</p>}
+                {rules.length ? (
+                  <RuleTable engine={engine} rules={rules} onSearch={onSearch} ticking={ticking} />
+                ) : (
+                  <p className="muted">None</p>
+                )}
               </div>
             ))}
           </div>
+          <RulesOffList ticking={ticking} onSearch={onSearch} />
         </section>
+      )}
+    </>
+  );
+}
+
+/** The rules turned off from here, each with where it stands and a way to
+ * turn it back on; and how the engines last took the list. */
+function RulesOffList({ ticking, onSearch }: { ticking: Ticking; onSearch: (text: string) => void }) {
+  const now = useNow();
+  const data = ticking.data;
+  if (ticking.error) return <p className="error">{ticking.error}</p>;
+  if (!data?.enabled) return null;
+  // The rules ticked, and those unticked that an engine still has off.
+  const restoring = (data.applied?.rules ?? []).filter((rule) => offState(rule, data) === "restoring");
+  const shown: RuleOff[] = [
+    ...data.rules,
+    ...restoring.map((rule) => ({ ...rule, rule: `${rule.gid}:${rule.sid}`, message: "", added_ms: 0 })),
+  ];
+  if (!shown.length) {
+    return (
+      <p className="muted">
+        Tick a rule&apos;s FP box to turn it off as a false positive in its engine; untick it to turn it back on.
+      </p>
+    );
+  }
+  const waiting = data.rules.filter((rule) => offState(rule, data) === "applying");
+  const slow = waiting.some((rule) => now - rule.added_ms > RULES_OFF_SLOW_MS);
+  return (
+    <>
+      <h3>Turned off as false positives</h3>
+      <div className="table-wrap">
+        <table className="rules-off">
+          <thead>
+            <tr>
+              <th>Engine</th>
+              <th className="rule">Rule</th>
+              <th>State</th>
+              <th>Message</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((rule) => {
+              const state = offState(rule, data);
+              const engineWords = data.applied?.engines?.[rule.engine] ?? "";
+              return (
+                <tr key={`${rule.engine}:${rule.gid}:${rule.sid}`}>
+                  <td>{NAMES[rule.engine]}</td>
+                  <td className="rule">
+                    <button type="button" className="link" title="Show its alerts in the Alert Explorer" onClick={() => onSearch(rule.rule)}>
+                      {rule.rule}
+                    </button>
+                  </td>
+                  <td>
+                    {state && <span className={`off-state ${state}`}>{OFF_WORDS[state]}</span>}
+                    {state === "error" && (
+                      <div className="differs">{data.applied?.error ?? engineWords.replace(/^error: /, "")}</div>
+                    )}
+                  </td>
+                  <td className="message" title={rule.message}>
+                    {rule.message}
+                  </td>
+                  <td>
+                    {state !== "restoring" && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          ticking.toggle({ engine: rule.engine, gid: rule.gid, sid: rule.sid, message: rule.message, rule: rule.rule }, false)
+                        }
+                      >
+                        Turn back on
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {slow && (
+        <p className="warning">
+          The engines haven&apos;t taken the list for over 5 minutes: is root&apos;s watcher installed (
+          <code>sudo deploy/install-rules-off.sh</code>)?
+        </p>
+      )}
+      {data.applied && (
+        <p className="muted">
+          Last applied {dayTime(data.applied.applied_ms)}
+          {byEngine(data.applied.engines).map(([engine, words]) => ` · ${NAMES[engine]}: ${words.startsWith("error") ? "not taken" : words}`)}
+        </p>
       )}
     </>
   );

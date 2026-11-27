@@ -473,25 +473,55 @@ def fingerprint_list(db_path: Path | str, intel_db: Path | str | None = None) ->
     """Every device's client fingerprints, the newest first, each with the
     app it was named as (``labels``) and, from the threat-intel database
     ``intel_db``, the program it is known as (``known_app``) and its sites
-    under the service they belong to (``services``)."""
+    under the service they belong to (``services``). Each is checked
+    against the Client Hellos read from Suricata's pcap files
+    (ids/tls_check.py): ``checked`` is how many of the device's gave that
+    JA4; ``packet_only`` lists the device and JA4 pairs the packets gave
+    that Suricata recorded none of (the newest 20)."""
     with closing(_connect(db_path)) as conn:
         if not _has_tables(conn):
-            return {"fingerprints": []}
+            return {"fingerprints": [], "packet_only": []}
+        hellos = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tls_hellos'"
+        ).fetchone()[0] > 0
+        checked = (
+            "(SELECT COUNT(*) FROM tls_hellos AS h WHERE h.client = f.device AND h.ja4 = f.fingerprint)"
+            if hellos else "0"
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT f.device, f.fingerprint, f.ja4, f.protocols, f.first_seen,
                    f.last_seen, f.connections, f.sites, f.ja3, f.ja3s, f.alpn,
                    l.app, l.note,
                    (SELECT COUNT(*) FROM tls_fingerprints AS o
-                    WHERE o.fingerprint = f.fingerprint) AS devices
+                    WHERE o.fingerprint = f.fingerprint) AS devices,
+                   {checked} AS checked
             FROM tls_fingerprints AS f
             LEFT JOIN tls_fingerprint_labels AS l ON l.fingerprint = f.fingerprint
             ORDER BY f.last_seen DESC
             """
         ).fetchall()
+        packet_only = conn.execute(
+            """
+            SELECT h.client, h.ja4, MAX(h.time_ms), COUNT(*), MAX(h.site)
+            FROM tls_hellos AS h
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tls_fingerprints AS f WHERE f.device = h.client AND f.fingerprint = h.ja4
+            )
+            GROUP BY h.client, h.ja4
+            ORDER BY MAX(h.time_ms) DESC
+            LIMIT 20
+            """
+        ).fetchall() if hellos else []
     intel = Intel(intel_db)
     try:
-        return {"fingerprints": [_with_names(row, intel) for row in _rows(rows)]}
+        return {
+            "fingerprints": [_with_names(row, intel) for row in _rows(rows)],
+            "packet_only": [
+                {"device": device, "ja4": ja4, "last_seen_ms": last, "connections": count, "site": site}
+                for device, ja4, last, count, site in packet_only
+            ],
+        }
     finally:
         intel.close()
 
@@ -521,10 +551,11 @@ def _rows(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
                 "app": app,
                 "note": note,
                 "devices": devices,
+                "checked": checked,
             }
             for (
                 device, fingerprint, ja4, protocols, first, last, connections,
-                sites, ja3, ja3s, alpn, app, note, devices,
+                sites, ja3, ja3s, alpn, app, note, devices, checked,
             ) in rows
     ]
 

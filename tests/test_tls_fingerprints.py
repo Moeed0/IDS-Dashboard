@@ -153,7 +153,7 @@ def test_a_database_from_before_the_fingerprints_has_none(tmp_path):
     path = tmp_path / "old.db"
     sqlite3.connect(path).execute("CREATE TABLE alerts (id INTEGER)").connection.close()
 
-    assert fingerprint_list(path) == {"fingerprints": []}
+    assert fingerprint_list(path) == {"fingerprints": [], "packet_only": []}
     assert labels(path) == {}
 
 

@@ -250,20 +250,23 @@ suppress =
 }
 --]]
 
--- Alerts not wanted (the user's word, 26 Nov 2026; every other rule stays
--- on, for the most alerts):
--- 112:1 (arp_spoof) unicast ARP request: the Archer checks its ARP entries
--- by asking each client directly, about 36,000 times a day. arp_spoof's
--- other alerts (112:2-4, forged ARP) stay on.
--- 1:1384 OS-WINDOWS Microsoft Windows UPnP malformed advertisement (since
--- 26 Nov 2026): the routers' ordinary UPnP announcements, about 1,200 an
--- hour; it looks for a 2001 attack on Windows ME/XP. Its Suricata copy
--- (2101384) is off too (deploy/suricata/disable.conf).
+-- Every rule on, for the most alerts. From 26 to 27 Nov 2026, 112:1
+-- (arp_spoof) unicast ARP request and 1:1384 OS-WINDOWS Microsoft Windows
+-- UPnP malformed advertisement were suppressed here; they are on again (the
+-- user's word), to be turned off from the dashboard's Top rules if wanted.
 suppress =
 {
-    { gid = 112, sid = 1 },
-    { gid = 1, sid = 1384 },
 }
+
+-- The rules ticked as false positives in the dashboard (its Overview, Top
+-- rules): deploy/rules-off/ids-rules-off.py writes them to this file, as
+-- root, and reloads Snort. Without the file, none.
+local ticked = loadfile('/usr/local/etc/snort/suppress_dashboard.lua')
+if ticked then
+    for _, rule in ipairs(ticked()) do
+        table.insert(suppress, { gid = rule.gid, sid = rule.sid })
+    end
+end
 
 --[[
 event_filter =

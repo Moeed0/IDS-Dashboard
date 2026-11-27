@@ -1,0 +1,8 @@
+# Turns off, in both engines, the rules ticked in the dashboard
+# (deploy/rules-off/ids-rules-off.py, installed as root's own copy).
+[Unit]
+Description=IDS dashboard: turn off the ticked rules in Snort and Suricata
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ids-rules-off @LIST@ /var/lib/ids-rules-off/status.json

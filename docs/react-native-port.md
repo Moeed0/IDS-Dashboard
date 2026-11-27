@@ -224,7 +224,19 @@ What the screen shows:
   the Alert Explorer's, with a bar behind each count in the engine's colour,
   as long as its share of the busiest rule's; a rule that fired with two
   revisions has a row for each. `rule` is the SID with a GID other than 1
-  first, as the combined export names rules.
+  first, as the combined export names rules. Each row starts with an FP
+  box: `GET /rules-off` gives `{enabled, rules, applied}`, the rules ticked
+  as false positives (`{engine, gid, sid, rule, message, added_ms}`) and
+  how root's `ids-rules-off` last applied them (`{applied_ms, rules,
+  engines: {snort, suricata: "reloaded" | "unchanged" | "error: …"},
+  error?}`, null before it ran); `POST /rules-off/set?engine=&gid=&sid=&off=1|0&message=`
+  ticks or unticks one (after the page asks) and answers the same.
+  A rule stands "Turning off…" until `applied` has it, then "Off" (its
+  row dimmed); "Not turned off" with the engine's words when it failed;
+  an unticked rule still in `applied`, "Turning back on…". Below the
+  tables, "Turned off as false positives" lists them with "Turn back on",
+  when the list was last applied, and a warning when the engines haven't
+  taken it for 5 minutes (the watcher isn't installed).
 
 The last hour, the last 24 hours and the top rules end at `complete_end_ms`,
 the latest time up to which both engines' alerts are stored (one engine's can
@@ -447,9 +459,15 @@ each one left out takes every alert:
   browser; the filters last while the page is open. Each row is one line,
   so that the
   two lists side by side line up: a message too long for its column ends in
-  "…" and shows whole on hover. An alert's `names` stand in a tag before
-  its message, so an encrypted connection's program and service show at a
-  glance.
+  "…" and shows whole on hover. The columns: time, packet, engine (a badge,
+  "Sn" or "Su" in the engine's colour), both, rule, severity, protocol,
+  source, destination, App / Traffic and message. App / Traffic is the
+  alert's `names` in a tag (an encrypted connection's program and service),
+  else its OpenAppID `app`, else "Unidentified" when its `service` is
+  tls, quic or ssl and "No TLS" otherwise. The table is 13px, a size below
+  the rest; a heading's right edge drags to resize its column (a longer
+  value then ends in "…"), double-clicked for its own width again, and the
+  widths are kept in that browser.
 
 ### One alert, whole
 
@@ -496,6 +514,17 @@ A row clicked (or Enter on it) opens a panel down the right side:
   1.2 only) are there when an engine gives them; the panel shows them as
   "Encryption" and "Certificate". Snort's record itself is the last of
   `raw`, with `"source": "snort_tls"`, `"id": -1` and no `uid`.
+  `packet_check` (`src/ids/tls_check.py`) is the connection's client
+  fingerprints worked out again from its Client Hello in Suricata's pcap
+  files: `{result, ja4, ja3, ja4_r, ja3_string, site}`, `result` "same"
+  (as the alert's), "differs" (the alert's in `suricata_ja4` and
+  `suricata_ja3`) or "added" (the alert had none, or an incomplete one in
+  `suricata_ja4`; `fingerprint` and the program are then the packet's).
+  The panel shows it as "Fingerprint": the JA4 (JA4_r on hover), "✓ the
+  same from the packet" or "from the packet", the JA3, and Suricata's in
+  red when it differs. `GET /tls-fingerprints` gives each row `checked`,
+  how many of its handshakes the packets confirmed, and `packet_only`, the
+  device and JA4 pairs the packets gave that Suricata recorded none of.
 - The panel shows the whole message, time, engine, rule (with a link that
   puts it in the Rule filter), class, protocol and service, the app, the
   connection's program ("from" its source; red when it is known malware)
@@ -508,8 +537,10 @@ A row clicked (or Enter on it) opens a panel down the right side:
   as JSON; and "Raw output": each record of `raw` as indented JSON (or one
   line, with "one line" ticked), headed by its engine, "this alert", its
   UID or "the TLS connection" (Snort's record of it), and the log it came
-  from, with "copy" to copy it. Esc or ✕ closes
-  it; the row it shows is outlined.
+  from, with "copy" to copy it. Esc, ✕ or a click anywhere outside it
+  closes it (a click on another alert's row opens that one instead); its
+  title and ✕ stay at its top while it scrolls, and the row it shows is
+  outlined.
 - In the lists the headings stay in view while the page is scrolled, and a
   row that came in since the last answer lights up for a moment (page 1 of
   an unchanged list only).

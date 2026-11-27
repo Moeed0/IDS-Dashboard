@@ -5,7 +5,7 @@
 // with scripts/tls_fingerprints.py --label), and each site under the service
 // it belongs to. Each name is written once.
 import { useState } from "react";
-import { count, useApi, useNow, type TlsFingerprint } from "./api";
+import { count, useApi, useNow, type PacketOnlyFingerprint, type TlsFingerprint } from "./api";
 import { clock } from "./time";
 
 // Handshakes are stored within seconds; a minute is enough for this list.
@@ -61,7 +61,12 @@ function Breakable({ text }: { text: string }) {
 }
 
 export function TlsFingerprints({ onUnauthorized }: { onUnauthorized: () => void }) {
-  const { data, error } = useApi<{ fingerprints: TlsFingerprint[] }>("/tls-fingerprints", {}, onUnauthorized, REFRESH_MS);
+  const { data, error } = useApi<{ fingerprints: TlsFingerprint[]; packet_only?: PacketOnlyFingerprint[] }>(
+    "/tls-fingerprints",
+    {},
+    onUnauthorized,
+    REFRESH_MS,
+  );
   const now = useNow();
   const [device, setDevice] = useState("");
 
@@ -76,8 +81,23 @@ export function TlsFingerprints({ onUnauthorized }: { onUnauthorized: () => void
         Which program each device used for its encrypted connections (JA4 and JA3, from Suricata), and the services
         and sites it went to. Never what was sent inside. Programs and services are named from the threat-intel
         database when it knows them. A fingerprint new on the network or new for a device, or on the known-bad
-        lists, raises a Suricata alert.
+        lists, raises a Suricata alert. &quot;✓ from the packets&quot;: that many of its handshakes were worked out
+        again here from the Client Hello in Suricata&apos;s saved packets (the connections it alerted on) and gave
+        the same JA4.
       </p>
+      {(data?.packet_only?.length ?? 0) > 0 && (
+        <div className="differs">
+          In the packets but not in Suricata&apos;s records:
+          <ul>
+            {data?.packet_only?.map((item) => (
+              <li key={`${item.device} ${item.ja4}`}>
+                {item.device} <code>{item.ja4}</code>
+                {item.site && ` · ${item.site}`} · {count(item.connections)}× · {clock(item.last_seen_ms, now)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {error && <p className="error">{error}</p>}
       {data && !rows.length && <p className="muted">None yet: no device has opened a TLS or QUIC connection since this started.</p>}
       {devices.length > 1 && (
@@ -134,7 +154,14 @@ export function TlsFingerprints({ onUnauthorized }: { onUnauthorized: () => void
                         {row.alpn.length > 0 && ` · ${row.alpn[0]}`}
                       </div>
                     </td>
-                    <td className="number">{count(row.connections)}</td>
+                    <td className="number">
+                      {count(row.connections)}
+                      {(row.checked ?? 0) > 0 && (
+                        <div className="muted" title="Worked out again from the Client Hello in Suricata's saved packets: the same JA4">
+                          ✓ {count(row.checked ?? 0)} from the packets
+                        </div>
+                      )}
+                    </td>
                     <td className="names">
                       <Services row={row} />
                     </td>

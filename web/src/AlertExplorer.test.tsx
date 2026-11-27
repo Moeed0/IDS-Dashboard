@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { RawOutput, ruleEntry } from "./AlertDetail";
-import { SeverityCircles, arrived, filledCircles, packetKey, packetShades, tableRequest } from "./AlertExplorer";
+import { EngineIcon, SeverityCircles, appTraffic, arrived, filledCircles, packetKey, packetShades, tableRequest } from "./AlertExplorer";
 import type { AlertRow } from "./api";
 
 /** A row on ``packet``; the list puts the newest first. */
@@ -11,6 +11,23 @@ function row(id: number, packet: number | string): AlertRow {
     message: "", class: null, severity: 3, protocol: null, service: null, src: null, dst: null, both: false,
   };
 }
+
+describe("appTraffic", () => {
+  it("names the app or traffic, and says when nothing could", () => {
+    expect(appTraffic({ ...row(1, 1), names: "YouTube", app: "HTTPS" })).toEqual({ text: "YouTube", named: true });
+    expect(appTraffic({ ...row(1, 1), engine: "snort", app: "DNS" })).toEqual({ text: "DNS", named: true });
+    expect(appTraffic({ ...row(1, 1), service: "tls" })).toEqual({ text: "Unidentified", named: false });
+    expect(appTraffic({ ...row(1, 1), service: "SSL" })).toEqual({ text: "Unidentified", named: false });
+    expect(appTraffic({ ...row(1, 1), service: "dns" })).toEqual({ text: "No TLS", named: false });
+    expect(appTraffic(row(1, 1))).toEqual({ text: "No TLS", named: false });
+  });
+
+  it("shows each engine as a badge with its name on hover", () => {
+    const html = renderToStaticMarkup(<EngineIcon engine="snort" />);
+    expect(html).toContain('title="Snort"');
+    expect(html).toContain(">Sn<");
+  });
+});
 
 const shaded = (shades: Map<string, boolean>) => [...shades].filter(([, shade]) => shade).map(([packet]) => packet);
 

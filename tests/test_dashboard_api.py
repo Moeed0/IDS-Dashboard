@@ -581,3 +581,32 @@ def test_the_intel_database_is_offered_to_the_llm_pc(tmp_path):
     assert status == 200 and body == intel.read_bytes()
     assert 'filename="intel.db"' in headers["content-disposition"]
     assert _get(app, "/intel/intel.db", token="wrong")[0] == 401
+
+
+def test_rules_are_ticked_as_false_positives_for_root_to_turn_off(db_path, tmp_path):
+    listed, status = tmp_path / "rules_off.json", tmp_path / "status.json"
+    app = create_app(
+        db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None,
+        rules_off_file=listed, rules_off_status=status,
+    )
+    code, _, body = _get(app, "/rules-off")
+    assert (code, json.loads(body)) == (200, {"enabled": True, "rules": [], "applied": None})
+
+    code, _, body = _get(
+        app, "/rules-off/set", method="POST", engine="suricata", gid="1", sid="2200007", off="1",
+        message="SURICATA IPv4 padding required",
+    )
+    assert code == 200
+    assert [(rule["engine"], rule["rule"]) for rule in json.loads(body)["rules"]] == [("suricata", "1:2200007")]
+    assert json.loads(listed.read_text())["rules"][0]["message"] == "SURICATA IPv4 padding required"
+    # A GET can't tick, a wrong engine is refused, and the token is needed.
+    assert _get(app, "/rules-off/set", engine="snort", gid="1", sid="2")[0] == 405
+    assert _get(app, "/rules-off/set", method="POST", engine="zeek", gid="1", sid="2")[0] == 400
+    assert _get(app, "/rules-off/set", method="POST", token=None, engine="snort", gid="1", sid="2")[0] == 401
+    code, _, body = _get(app, "/rules-off/set", method="POST", engine="suricata", gid="1", sid="2200007", off="0")
+    assert json.loads(body)["rules"] == []
+
+    # Not set up: nothing to tick.
+    off = create_app(db_path=db_path, ids_sources={}, token=TOKEN, rule_intelligence=None, web_dist=None)
+    assert json.loads(_get(off, "/rules-off")[2])["enabled"] is False
+    assert _get(off, "/rules-off/set", method="POST", engine="snort", gid="1", sid="2")[0] == 400

@@ -164,6 +164,10 @@ class Settings:
     # Snort's extractor log: a JSON line per TLS connection (ids/snort_tls.py).
     snort_tls_file: Path
     suricata_eve_file: Path
+    # Suricata's pcap-log files (the packets of the flows it alerted on), whose
+    # Client Hellos check its TLS fingerprints (ids/tls_check.py): this, its
+    # pcap-log filename, with Suricata's ".<seconds>" after it.
+    suricata_pcap: Path
     interface: str
     alert_retention: int
     batch_size: int
@@ -194,6 +198,11 @@ class Settings:
     suricata_config: Path
     # How many rules each engine loaded, as the last rule update saw it.
     rule_counts_file: Path
+    # The rules ticked as false positives in the dashboard, which root's
+    # ids-rules-off turns off in the engines (deploy/install-rules-off.sh),
+    # and the file it says how that went in.
+    rules_off_file: Path
+    rules_off_status: Path
     # The basic rules both engines share (deploy/rules/local.rules), which
     # the rule index adds to each engine's own; None (IDS_LOCAL_RULES empty)
     # on a machine whose engines load none.
@@ -225,6 +234,10 @@ def get_settings() -> Settings:
         snort_tls_file=_path_from_env(
             "IDS_SNORT_TLS_FILE",
             "/var/log/snort/extractor_tls.json",
+        ),
+        suricata_pcap=_path_from_env(
+            "IDS_SURICATA_PCAP",
+            "/var/log/suricata/log.pcap",
         ),
         suricata_eve_file=_path_from_env(
             "IDS_SURICATA_EVE_FILE",
@@ -308,6 +321,8 @@ def get_settings() -> Settings:
             "IDS_RULE_COUNTS_FILE",
             ".runtime/engine_rule_counts.json",
         ),
+        rules_off_file=_path_from_env("IDS_RULES_OFF_FILE", ".runtime/rules_off.json"),
+        rules_off_status=_path_from_env("IDS_RULES_OFF_STATUS", "/var/lib/ids-rules-off/status.json"),
         local_rules=(
             _path_from_env("IDS_LOCAL_RULES", "deploy/rules/local.rules")
             if _value_from_env("IDS_LOCAL_RULES", "deploy/rules/local.rules").strip()

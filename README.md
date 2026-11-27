@@ -86,7 +86,15 @@ network interface (afpacket)
   - the last hour's alerts, and the packets one or both engines alerted on;
   - the last 24 hours, or a live chart of the last 15 minutes, with the
     times the machine was off shaded;
-  - the top rules.
+  - the top rules, each with an FP box: ticking a rule as a false positive
+    turns it off in its engine within a minute or two, and unticking it (or
+    "Turn back on" in the list of rules turned off below them) turns it on
+    again. Root's `ids-rules-off` does it, once
+    `sudo deploy/install-rules-off.sh` has set it up: it suppresses the
+    rule (Suricata's threshold file, Snort's suppress list) and reloads
+    the engine, which keeps capturing meanwhile. With
+    `IDS_API_REQUIRE_TOKEN=false`, anyone who can reach the dashboard can
+    tick.
 - **Alert Explorer:** every stored alert, grouped by packet (each alert has
   a 7-character UID from its minute and its number in that minute, and a
   packet is named by its first alert's), newest first, with filters for the
@@ -370,8 +378,10 @@ malware), never what it sends. With `sudo deploy/apply-suricata-settings.sh`
   two services list goes under the one already there), and a service named
   like the program only shows its sites. The Alert Explorer names the
   program and service of a Suricata alert's TLS or QUIC connection the
-  same way, in a tag before its message ("Facebook", "Adguard") and in its
-  alert panel. An alert with no TLS details of its own (a lone reset, a
+  same way, in its App / Traffic column ("Facebook", "AdGuard") and in its
+  alert panel; with no names there, the column has the app Snort's
+  OpenAppID named, or else "Unidentified" (an encrypted connection nothing
+  named) or "No TLS". An alert with no TLS details of its own (a lone reset, a
   stream event, an IP rule) to or from an address a TLS handshake went to
   gets the service of the sites seen there, marked as probable
   ("Instagram?"): one address can serve several sites. The collector keeps
@@ -393,6 +403,20 @@ malware), never what it sends. With `sudo deploy/apply-suricata-settings.sh`
   panel gives each name once, with how the connection is encrypted and
   its certificate. Snort has no JA3 or JA4, and no QUIC inspector, so the
   programs and QUIC stay Suricata's;
+- Suricata's own JA3 and JA4 are checked: the collector reads its pcap
+  files (`/var/log/suricata/log.pcap.*`, the packets of every flow it
+  alerted on; `IDS_SURICATA_PCAP`) every 5 s, puts each TCP Client Hello
+  back together and works its JA3 and JA4 out again with its own code
+  (`src/ids/tls_check.py`, the standard library only), and keeps them
+  (`tls_hellos`). An alert's panel shows its "Fingerprint" with "✓ the
+  same from the packet", in red when Suricata's differs, or "from the
+  packet" when the alert had none: an alert Suricata raised on the first
+  segment of a Client Hello that spans two has an empty JA4
+  (`t00i000000_…`), and gets the packet's (and its program's name). Each
+  row of the TLS Fingerprints page says how many of its handshakes the
+  packets confirmed, and the page lists in red any device and JA4 the
+  packets gave that Suricata never recorded. QUIC's Client Hello is
+  encrypted, so QUIC fingerprints aren't checked;
 - the threat-intel database holds FoxIO's JA4+ mapping, abuse.ch's malware
   JA3s and domain-list-community's sites of each service, which
   `intel_lookup.py` on the LLM PC looks the file's fingerprints up in

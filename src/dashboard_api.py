@@ -76,6 +76,8 @@ from ids.dashboard_data import (
     status,
 )
 from ids.offline_intelligence import DEFAULT_DB_PATH as INTEL_DB
+from ids.rules_off import listing as rules_off_listing
+from ids.rules_off import set_rule as set_rule_off
 from ids.test_alert import result_path
 from ids.tls_fingerprints import fingerprint_list, set_label
 from ids.uptime import machine_off_periods
@@ -236,6 +238,8 @@ def create_app(
     send_token: str | None = None,
     sender: Callable[[str, bytes, Mapping[str, str]], tuple[int, str]] = post_file,
     intel_db: Path | str | None = None,
+    rules_off_file: Path | str | None = None,
+    rules_off_status: Path | str | None = None,
 ) -> Starlette:
     """The API over the live database at ``db_path``, answering requests
     that send ``token`` (every request when it is None), and the built React
@@ -246,7 +250,9 @@ def create_app(
     off from ``off_periods``, and each engine's drops from its statistics
     file in ``stats_files``. One export holds at most ``export_max_alerts``.
     Send POSTs the chosen alerts' file to ``send_url`` (none: Send is off)
-    with ``send_token``, through ``sender``."""
+    with ``send_token``, through ``sender``. The rules ticked as false
+    positives are kept in ``rules_off_file`` (None: ticking is off), which
+    root's ids-rules-off applies, saying how in ``rules_off_status``."""
     if token == "":
         raise ValueError("the API needs a token, or None to let every request in")
 
@@ -506,6 +512,33 @@ def create_app(
             raise BadRequest(str(exc)) from None
         return JSONResponse({"saved": True})
 
+    def rules_off(request: Request) -> Response:
+        """The rules ticked as false positives, and how the engines took them."""
+        if rules_off_file is None:
+            return JSONResponse({"enabled": False, "rules": [], "applied": None})
+        return JSONResponse(
+            {"enabled": True, **rules_off_listing(rules_off_file, rules_off_status or "/nonexistent")}
+        )
+
+    def rule_off(request: Request) -> Response:
+        """Ticks a rule as a false positive (``off=1``) or unticks it
+        (``off=0``): ``engine``, ``gid``, ``sid`` and its ``message``."""
+        if rules_off_file is None:
+            raise BadRequest("turning rules off isn't set up on this machine")
+        try:
+            set_rule_off(
+                rules_off_file,
+                request.query_params.get("engine", ""),
+                request.query_params.get("gid"),
+                request.query_params.get("sid"),
+                request.query_params.get("off", "1") not in ("0", "false", ""),
+                message=request.query_params.get("message", ""),
+                now_ms=int(time.time() * 1000),
+            )
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from None
+        return JSONResponse({"enabled": True, **rules_off_listing(rules_off_file, rules_off_status or "/nonexistent")})
+
     def rule_pair_list(request: Request) -> Response:
         return JSONResponse(rule_pairs(db_path, engines=engines))
 
@@ -558,6 +591,8 @@ def create_app(
         Route("/alerts/values", guarded(alert_values)),
         Route("/alerts/{alert_id:int}", guarded(alert_screen)),
         Route("/rule-pairs", guarded(rule_pair_list)),
+        Route("/rules-off", guarded(rules_off)),
+        Route("/rules-off/set", guarded(rule_off), methods=["POST"]),
         Route("/tls-fingerprints", guarded(tls_fingerprint_list)),
         Route("/tls-fingerprints/label", guarded(tls_fingerprint_label), methods=["POST"]),
         Route("/export/window", guarded(export_window_screen)),
@@ -691,6 +726,8 @@ def main(argv: list[str] | None = None) -> None:
         send_url=send_url,
         send_token=send_token,
         intel_db=INTEL_DB,
+        rules_off_file=settings.rules_off_file,
+        rules_off_status=settings.rules_off_status,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

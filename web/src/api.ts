@@ -240,6 +240,21 @@ export interface AlertDetails {
     encryption?: { version: string | null; cipher: string | null; curve: string | null };
     /** The server's certificate (TLS 1.2: TLS 1.3 encrypts it). */
     certificate?: { subject: string | null; issuer: string | null };
+    /** The client fingerprints worked out again from the connection's
+     * Client Hello in Suricata's pcap files (ids/tls_check.py): "same" as
+     * the alert's, "differs" (the alert's are suricata_ja4 and
+     * suricata_ja3), or "added" (the alert had none, or an incomplete one,
+     * suricata_ja4: raised before the Client Hello was all there). */
+    packet_check?: {
+      result: "same" | "differs" | "added";
+      ja4: string;
+      ja3: string;
+      ja4_r: string;
+      ja3_string: string;
+      site: string | null;
+      suricata_ja4?: string | null;
+      suricata_ja3?: string | null;
+    };
   } | null;
 }
 
@@ -453,12 +468,74 @@ export async function fetchSelection(params: Params): Promise<{ filename: string
   return { filename, text: await response.text() };
 }
 
+/** A rule ticked as a false positive, to turn off in its engine. */
+export interface RuleOff {
+  engine: Engine;
+  gid: number;
+  sid: number;
+  rule: string;
+  message: string;
+  added_ms: number;
+}
+
+/** The rules ticked as false positives (/rules-off), and how root's
+ * ids-rules-off last turned them off (null before it ever ran, or when it
+ * isn't installed: sudo deploy/install-rules-off.sh). */
+export interface RulesOff {
+  enabled: boolean;
+  rules: RuleOff[];
+  applied: {
+    applied_ms: number;
+    rules?: { engine: Engine; gid: number; sid: number }[];
+    /** "reloaded", "unchanged" or "error: …". */
+    engines: Partial<Record<Engine, string>>;
+    error?: string;
+  } | null;
+}
+
+/** Ticks a rule as a false positive (``off``) or unticks it; the list after. */
+export async function setRuleOff(
+  rule: { engine: Engine; gid: number; sid: number; message: string },
+  off: boolean,
+): Promise<RulesOff> {
+  const params = { engine: rule.engine, gid: rule.gid, sid: rule.sid, message: rule.message, off: off ? 1 : 0 };
+  return (await (await request("/rules-off/set", params, undefined, "POST")).json()) as RulesOff;
+}
+
+const sameRule = (a: { engine: Engine; gid: number; sid: number }, b: { engine: Engine; gid: number; sid: number }) =>
+  a.engine === b.engine && a.gid === b.gid && a.sid === b.sid;
+
+/** Where a rule stands: "off" once its engine took it, "applying" until
+ * then, "error" when its engine didn't; and for a rule unticked but still
+ * off in its engine, "restoring". */
+export function offState(
+  rule: { engine: Engine; gid: number; sid: number },
+  data: RulesOff,
+): "off" | "applying" | "error" | "restoring" | null {
+  const ticked = data.rules.some((other) => sameRule(other, rule));
+  const applied = data.applied?.rules?.some((other) => sameRule(other, rule)) ?? false;
+  const engine = data.applied?.engines?.[rule.engine] ?? "";
+  if (ticked && applied) return engine.startsWith("error") ? "error" : "off";
+  if (ticked) return data.applied?.error || engine.startsWith("error") ? "error" : "applying";
+  return applied ? "restoring" : null;
+}
+
 /** Sends the combined JSON of the alerts the filters choose to the LLM PC. */
 export async function sendSelection(params: Params): Promise<SentSelection> {
   return (await (await request("/export/selection/send", params, undefined, "POST")).json()) as SentSelection;
 }
 
 /** One device's client fingerprint (/tls-fingerprints). */
+/** A device and JA4 a Client Hello in Suricata's pcap files gave that
+ * Suricata recorded none of. */
+export interface PacketOnlyFingerprint {
+  device: string;
+  ja4: string;
+  last_seen_ms: number;
+  connections: number;
+  site: string | null;
+}
+
 export interface TlsFingerprint {
   device: string;
   /** The JA4, or ja3:<hash> when Suricata gave none. */
@@ -478,6 +555,9 @@ export interface TlsFingerprint {
   note: string | null;
   /** How many devices used it. */
   devices: number;
+  /** How many of the device's Client Hellos read from Suricata's pcap
+   * files (the flows it alerted on) gave this JA4: a check of Suricata's. */
+  checked?: number;
   /** The program the threat-intel database knows it as (FoxIO's JA4+
    * mapping, or abuse.ch's list of malware JA3s); null when neither lists it. */
   known_app: { name: string; source: string; malware: boolean } | null;

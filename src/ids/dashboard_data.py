@@ -42,6 +42,8 @@ from ids.combined_detections import (
 from ids.config import KNOWN_ENGINES
 from ids.ids_config import read_network_variables
 from ids.snort_tls import checked, details, on_flow
+from ids.tls_check import compared
+from ids.tls_check import on_flow as hello_on_flow
 from ids.test_alert import read_result
 from ids.tls_fingerprints import (
     Intel,
@@ -591,15 +593,20 @@ def alerts(
             uids.update(connection.execute(
                 f"SELECT id, uid FROM alerts WHERE id IN ({', '.join('?' for _ in named)})", named
             ).fetchall())
+        # The Client Hello of each alert's connection, read from the packet
+        # (ids/tls_check.py).
+        hellos = {row[0]: hello_on_flow(connection, row[11], row[12], row[13], row[14], row[2]) for row in rows}
         # Suricata names its TLS and QUIC connections' app_proto "tls" and "quic".
-        encrypted = [row[0] for row in rows if row[1] == "suricata" and row[10] in ("tls", "quic")]
+        encrypted = [
+            row[0] for row in rows if row[1] == "suricata" and (row[10] in ("tls", "quic") or hellos[row[0]])
+        ]
         natives = dict(connection.execute(
             f"SELECT id, raw_json FROM alerts WHERE id IN ({', '.join('?' for _ in encrypted)})", encrypted
         ).fetchall()) if encrypted else {}
         servers = server_sites(connection, (value for row in rows for value in (row[11], row[13])))
         # Snort's record of each alert's TLS connection.
         flows = {row[0]: on_flow(connection, row[11], row[12], row[13], row[14], row[2]) for row in rows}
-    names = _connection_short_names(rows, natives, flows, servers, db_path, intel_db)
+    names = _connection_short_names(rows, natives, flows, hellos, servers, db_path, intel_db)
     # Each packet's rows together, where its first row stands.
     first_row: dict[Any, int] = {}
     for index, row in enumerate(rows):
@@ -634,19 +641,22 @@ def _connection_short_names(
     rows: Sequence[Sequence[Any]],
     natives: Mapping[int, str | None],
     flows: Mapping[int, Mapping[str, Any] | None],
+    hellos: Mapping[int, Mapping[str, Any] | None],
     servers: Mapping[str, list[str]],
     db_path: Path | str,
     intel_db: Path | str | None,
 ) -> dict[int, str]:
     """Each alert's connection named in a few words, by id: from its own
-    TLS or QUIC details or Snort's record of its connection, or else by
-    its server's address."""
-    known = fingerprint_labels(db_path) if natives else {}
+    TLS or QUIC details (or its Client Hello read from the packet, when it
+    has none) or Snort's record of its connection, or else by its server's
+    address."""
+    known = fingerprint_labels(db_path) if natives or any(hellos.values()) else {}
     intel = Intel(intel_db)
     named = {}
     try:
         for row in rows:
-            names = checked(_native_names(natives.get(row[0]), known, intel), flows.get(row[0]), intel)
+            native, _ = compared(_parsed(natives.get(row[0])), hellos.get(row[0]))
+            names = checked(_names(native, known, intel), flows.get(row[0]), intel)
             if not names_something(names):
                 # The destination first: an alert usually goes to the server.
                 names = names_by_address((row[13], row[11]), servers, intel)
@@ -658,14 +668,19 @@ def _connection_short_names(
     return named
 
 
-def _native_names(
-    text: str | None, known: Mapping[str, Mapping[str, Any]], intel: Intel,
-) -> dict[str, Any] | None:
+def _parsed(text: str | None) -> Mapping[str, Any] | None:
+    """A stored alert's record, or None when it isn't a JSON object."""
     try:
         native = json.loads(text) if text else None
     except ValueError:
         return None
-    return connection_names(native, labels=known, intel=intel) if isinstance(native, Mapping) else None
+    return native if isinstance(native, Mapping) else None
+
+
+def _names(
+    native: Mapping[str, Any] | None, known: Mapping[str, Mapping[str, Any]], intel: Intel,
+) -> dict[str, Any] | None:
+    return connection_names(native, labels=known, intel=intel) if native else None
 
 
 # The columns of an alert as the lists show it (_listed).
@@ -1289,6 +1304,7 @@ def alert_detail(
         }
         mine = listed[alert_id]
         flow = on_flow(connection, mine[11], mine[12], mine[13], mine[14], mine[2])
+        hello = hello_on_flow(connection, mine[11], mine[12], mine[13], mine[14], mine[2])
     packet_uid = listed[packet][15] if packet in listed else listed[alert_id][15]
     by_id = {row["id"]: row for row in near}
     rows = sorted(
@@ -1317,7 +1333,7 @@ def alert_detail(
             for key in ("rules", "cves", "attack_techniques", "flows", "packets")
             if key in document
         },
-        "connection": _connection(by_id.get(alert_id), listed[alert_id], flow, db_path, intel_db),
+        "connection": _connection(by_id.get(alert_id), listed[alert_id], flow, hello, db_path, intel_db),
         "raw": [
             _raw_record(by_id[other], listed[other][15])
             for other in (alert_id, *(other for other in together if other != alert_id))
@@ -1330,25 +1346,25 @@ def _connection(
     row: Mapping[str, Any] | None,
     listed: Sequence[Any],
     flow: Mapping[str, Any] | None,
+    hello: Mapping[str, Any] | None,
     db_path: Path | str,
     intel_db: Path | str | None,
 ) -> dict[str, Any] | None:
     """The program and service of a Suricata alert's TLS or QUIC connection
     checked against Snort's record of it (``flow``), or Snort's site alone,
     or else (any alert) the service of its server's address; with how the
-    connection is encrypted and its certificate, when an engine gives them."""
+    connection is encrypted and its certificate, when an engine gives them,
+    and its client fingerprint checked against the Client Hello read from
+    the packet (``hello``, ids/tls_check.py: ``packet_check``)."""
     intel = Intel(intel_db)
     try:
         native = None
-        names = None
         if row is not None and row["engine"] == "suricata":
-            try:
-                native = json.loads(row.get("raw_json") or "null")
-            except ValueError:
-                native = None
-            names = _native_names(row.get("raw_json"), fingerprint_labels(db_path), intel)
+            native = _parsed(row.get("raw_json"))
+        native, check = compared(native, hello)
+        names = _names(native, fingerprint_labels(db_path), intel) if native else None
         names = checked(names, flow, intel)
-        extra = details(native if isinstance(native, Mapping) else None, flow)
+        extra = details(native, flow) | ({"packet_check": check} if check else {})
         if names_something(names):
             return names | extra
         with closing(_connect(db_path)) as connection:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ from ids.schema import ensure_schema
 from ids.snort_tls import connection as snort_connection
 from ids.snort_tls import prune as prune_snort_tls
 from ids.snort_tls import record_connections
+from ids.tls_check import PcapReader
+from ids.tls_check import prune as prune_tls_hellos
 from ids.tailer import PersistentJsonTailer
 from ids.tls_fingerprints import handshake, record_handshakes
 
@@ -233,8 +236,10 @@ def run_periodic_retention(
                 settings.alert_retention,
             )
 
-        # Snort's TLS connections from before the oldest alert's.
+        # Snort's TLS connections and the Client Hellos from before the
+        # oldest alert's.
         prune_snort_tls(conn)
+        prune_tls_hellos(conn)
         conn.commit()
 
     # A full disk, say: the alerts stay in the database, past its limit,
@@ -336,6 +341,30 @@ def handle_line(
     )
 
 
+# How often Suricata's pcap files are read on for Client Hellos.
+PCAP_SECONDS = 5.0
+
+
+def poll_pcaps(
+    settings: Settings, pcaps: PcapReader, unread: set[str], hellos_read: int,
+) -> tuple[float, int]:
+    """Reads on in Suricata's pcap files and stores their Client Hellos
+    (ids/tls_check.py); when it ran, and how many it has read since the
+    last summary."""
+    conn = connect_database(settings.db_file)
+    try:
+        hellos_read += pcaps.poll(conn)
+        unread.discard("suricata_pcap")
+    # An unreadable file, or the database busy: tried again next time.
+    except (OSError, sqlite3.Error) as error:
+        if "suricata_pcap" not in unread:
+            print(f"[!] suricata pcap: {error}")
+        unread.add("suricata_pcap")
+    finally:
+        conn.close()
+    return time.monotonic(), hellos_read
+
+
 def run_collector(
     settings: Settings,
     *,
@@ -354,6 +383,10 @@ def run_collector(
     last_flush = time.monotonic()
     last_retention = time.monotonic()
     last_summary = time.monotonic()
+    # Suricata's pcap files, read every few seconds for the Client Hellos.
+    pcaps = PcapReader(settings.suricata_pcap) if "suricata" in settings.engines else None
+    last_pcap = 0.0
+    hellos_read = 0
 
     print("=== Dual IDS Collector ===")
     print(
@@ -362,6 +395,10 @@ def run_collector(
     for engine, path in sources(settings).items():
         print(
             f"{engine.capitalize() + ':':<18}{path}"
+        )
+    if pcaps is not None:
+        print(
+            f"Suricata pcap:    {settings.suricata_pcap}.*"
         )
     print(
         f"State:            {settings.state_file}"
@@ -454,9 +491,15 @@ def run_collector(
                 last_retention,
             )
 
+            if pcaps is not None and now - last_pcap >= PCAP_SECONDS:
+                last_pcap, hellos_read = poll_pcaps(settings, pcaps, unread, hellos_read)
+
             if time.monotonic() - last_summary >= SUMMARY_SECONDS:
                 print(stored_summary(stored, settings))
                 stored.clear()
+                if pcaps is not None:
+                    print(f"[HELLOS] {hellos_read} TLS Client Hellos read from Suricata's pcap files in the last minute")
+                    hellos_read = 0
                 last_summary = time.monotonic()
 
             time.sleep(0.05)

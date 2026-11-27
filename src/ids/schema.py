@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from ids.snort_tls import create_tables as create_snort_tls_tables
+from ids.tls_check import create_tables as create_tls_check_tables
 from ids.tls_fingerprints import create_tables as create_fingerprint_tables
 from ids.uids import assign_uids
 
@@ -292,6 +293,8 @@ def ensure_schema(conn: sqlite3.Connection, uid_mark: Path | None = None) -> Non
     create_fingerprint_tables(conn)
     # Snort's record of each TLS connection, from its extractor (ids/snort_tls.py).
     create_snort_tls_tables(conn)
+    # The Client Hellos read from Suricata's pcap files (ids/tls_check.py).
+    create_tls_check_tables(conn)
     had_app = "app" in _table_columns(conn, "alerts")
 
     _add_missing_columns(

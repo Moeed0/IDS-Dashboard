@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Install deploy/snort/snort.lua as the live Snort config. It enables every
 # registered rule (no rules disabled in ips.states) and Snort's built-in
-# decoder and inspector rules, as wanted for the most alerts (only 112:1,
-# the unicast ARP request, and 1:1384, the UPnP malformed advertisement,
-# are suppressed). Backs up the
+# decoder and inspector rules, as wanted for the most alerts (only the
+# rules turned off from the dashboard are suppressed). Backs up the
 # live config, validates the new one, and restarts Snort only if validation
 # passes; restores the backup if either step fails. It also installs
 # snort-lab's drop-in (afpacket, and --plugin-path for the shared-object

@@ -644,17 +644,93 @@ td.rule {
   text-align: center;
 }
 
-/* The message takes the width the other columns leave, at least 120px (a
-   narrower table scrolls), and ends in "…" when it is longer; hovering shows
-   it whole. */
-td.message .names {
-  margin-right: 6px;
+/* The Alert Explorer's tables: a little smaller and closer than the others,
+   so more of each alert fits on its line. */
+.alert-table {
+  font-size: 13px;
+}
+
+.alert-table th,
+.alert-table td {
+  padding: 2px 6px;
+}
+
+/* A heading's right edge, dragged to resize its column. */
+.alert-table th {
+  position: relative;
+}
+
+.alert-table th .resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.alert-table th .resize:hover {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+/* A column held to the width set for it. */
+.alert-table .sized {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An address and port: an IPv6 one ends in "…", whole on hover. */
+td.endpoint {
+  max-width: 21ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The app or service, up to about three names. */
+td.app {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+td.app .names {
   padding: 0 6px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--suricata) 22%, transparent);
   font-weight: 600;
 }
 
+/* The engine: a badge in its colour. */
+td.engine {
+  text-align: center;
+}
+
+.engine-icon {
+  display: inline-block;
+  min-width: 2.4em;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.engine-icon.snort {
+  background: var(--snort);
+}
+
+.engine-icon.suricata {
+  background: var(--suricata);
+}
+
+/* The message takes the width the other columns leave, at least 120px (a
+   narrower table scrolls), and ends in "…" when it is longer; hovering shows
+   it whole. */
 td.message {
   width: 100%;
   max-width: 0;
@@ -934,11 +1010,19 @@ td.bar.suricata {
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
 }
 
+/* The title and close button stay at the top while the panel scrolls. */
 .drawer-head {
+  position: sticky;
+  top: -14px;
+  z-index: 1;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  margin: -14px -16px 0;
+  padding: 14px 16px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--grid);
 }
 
 .drawer h2 {
@@ -1224,3 +1308,36 @@ td.bar.suricata {
   color: var(--error);
 }
 
+
+/* Top rules: the false-positive tick, and where a ticked rule stands. */
+th.tick,
+td.tick {
+  width: 1px;
+  padding-left: 6px;
+  padding-right: 2px;
+  text-align: center;
+}
+
+tr.ruled-off td {
+  opacity: 0.6;
+}
+
+.off-state {
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.off-state.error {
+  color: var(--error);
+}
+
+.rules-off td.message {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

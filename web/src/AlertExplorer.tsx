@@ -93,33 +93,135 @@ const SEVERITY: Column = {
   render: (row) => <SeverityCircles severity={row.severity} />,
 };
 // The message comes last and takes the width the others leave, on one line:
-// a longer one ends in "…" and shows whole on hover. An encrypted
-// connection's names (its program, the service of its site) come first.
+// a longer one ends in "…" and shows whole on hover.
 const MESSAGE: Column = {
   title: "Message",
   value: (row) => row.message,
   className: "message",
-  tip: (row) => (row.names ? `${row.names}: ${row.message}` : row.message),
-  render: (row) => (
-    <>
-      {row.names && <span className="names">{row.names}</span>}
-      {row.message}
-    </>
-  ),
+  tip: (row) => row.message,
 };
-const PANEL_COLUMNS = [TIME, PACKET, BOTH, RULE, SEVERITY, MESSAGE];
+
+// The services Suricata (app_proto) and Snort name an encrypted connection.
+const ENCRYPTED = new Set(["tls", "quic", "ssl"]);
+
+/** What the App / Traffic column says: the connection's names (its program
+ * and the service of its site), else the app OpenAppID named (Snort's
+ * alerts), else "Unidentified" on an encrypted connection nothing named
+ * and "No TLS" on any other. */
+export function appTraffic(row: AlertRow): { text: string; named: boolean } {
+  if (row.names) return { text: row.names, named: true };
+  if (row.app) return { text: row.app, named: true };
+  return { text: ENCRYPTED.has((row.service ?? "").toLowerCase()) ? "Unidentified" : "No TLS", named: false };
+}
+
+const APP: Column = {
+  title: "App / Traffic",
+  value: (row) => appTraffic(row).text,
+  className: "app",
+  hint:
+    "The app or service: from the connection's TLS details (Suricata, or Snort's record of it), from OpenAppID (Snort), " +
+    'or from the server\'s address ("?": probable). Unidentified: encrypted, but nothing named it. No TLS: not an encrypted connection',
+  tip: (row) =>
+    [appTraffic(row).text, row.app && row.names ? `OpenAppID: ${row.app}` : ""].filter(Boolean).join(" · "),
+  render: (row) => {
+    const found = appTraffic(row);
+    return found.named ? <span className="names">{found.text}</span> : <span className="muted">{found.text}</span>;
+  },
+};
+
+/** The engine as a small badge in its colour, its name on hover. */
+export function EngineIcon({ engine }: { engine: Engine }) {
+  const name = NAMES[engine] ?? engine;
+  return (
+    <span className={`engine-icon ${engine}`} role="img" aria-label={name} title={name}>
+      {engine === "snort" ? "Sn" : "Su"}
+    </span>
+  );
+}
+
+const ENGINE: Column = {
+  title: "Engine",
+  heading: "Eng.",
+  value: (row) => NAMES[row.engine] ?? row.engine,
+  className: "engine",
+  hint: "Engine: Sn is Snort, Su is Suricata",
+  render: (row) => <EngineIcon engine={row.engine} />,
+};
+const ENDPOINT = "endpoint";
+const PANEL_COLUMNS = [TIME, PACKET, BOTH, RULE, SEVERITY, APP, MESSAGE];
 const TABLE_COLUMNS: Column[] = [
   TIME,
   PACKET,
-  { title: "Engine", value: (row) => NAMES[row.engine] ?? row.engine },
+  ENGINE,
   BOTH,
   RULE,
   SEVERITY,
   { title: "Protocol", value: (row) => row.protocol ?? "" },
-  { title: "Source", value: (row) => row.src ?? "" },
-  { title: "Destination", value: (row) => row.dst ?? "" },
+  { title: "Source", value: (row) => row.src ?? "", className: ENDPOINT, tip: (row) => row.src ?? "" },
+  { title: "Destination", value: (row) => row.dst ?? "", className: ENDPOINT, tip: (row) => row.dst ?? "" },
+  APP,
   MESSAGE,
 ];
+
+// The column widths a person set by dragging a heading's right edge, by
+// column title, kept in this browser (a convenience: without storage the
+// columns start at their own widths again).
+type Widths = Record<string, number>;
+const MIN_WIDTH = 28;
+
+export function useColumnWidths(key: string): [Widths, (title: string, width: number | null) => void] {
+  const [widths, setWidths] = useState<Widths>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(key) ?? "{}") as unknown;
+      return stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Widths) : {};
+    } catch {
+      return {};
+    }
+  });
+  const setWidth = useCallback(
+    (title: string, width: number | null) =>
+      setWidths((previous) => {
+        const next = { ...previous };
+        if (width === null) delete next[title];
+        else next[title] = Math.max(MIN_WIDTH, Math.round(width));
+        try {
+          localStorage.setItem(key, JSON.stringify(next));
+        } catch {
+          // Storage can be blocked: the width lasts until the page reloads.
+        }
+        return next;
+      }),
+    [key],
+  );
+  return [widths, setWidth];
+}
+
+/** The right edge of a heading: drag it to make the column wider or
+ * narrower, double-click it for the column's own width again. */
+function ResizeHandle({ title, onWidth }: { title: string; onWidth: (title: string, width: number | null) => void }) {
+  const drag = useRef<{ x: number; width: number } | null>(null);
+  return (
+    <span
+      className="resize"
+      title="Drag to resize; double-click for its own width"
+      onPointerDown={(event) => {
+        const cell = event.currentTarget.parentElement;
+        if (!cell) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { x: event.clientX, width: cell.getBoundingClientRect().width };
+      }}
+      onPointerMove={(event) => {
+        if (drag.current) onWidth(title, drag.current.width + event.clientX - drag.current.x);
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+      }}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={() => onWidth(title, null)}
+    />
+  );
+}
 
 /**
  * Which packets get the shade: every other one down the list. A packet keeps
@@ -531,6 +633,17 @@ function AlertTable({
   );
   const first = data ? (data.page - 1) * data.page_size + 1 : 0;
   const shades = usePacketShades(data?.rows ?? []);
+  const [widths, setWidth] = useColumnWidths(engine ? "alert-columns-side" : "alert-columns");
+  // A set width holds the column to it, a longer value ending in "…".
+  const sized = (column: Column) => {
+    const width = widths[column.title];
+    return width === undefined
+      ? { className: column.className }
+      : {
+          className: [column.className, "sized"].filter(Boolean).join(" "),
+          style: { width, minWidth: width, maxWidth: width },
+        };
+  };
   // The alerts that came in since the last answer light up briefly: on the
   // first page of the same list only.
   const listed = JSON.stringify(tableRequest(query, engine, 1));
@@ -576,12 +689,13 @@ function AlertTable({
       {data && data.total > 0 && (
         <>
           <div className="table-wrap">
-            <table>
+            <table className="alert-table">
               <thead>
                 <tr>
                   {columns.map((column) => (
-                    <th key={column.title} className={column.className} title={column.hint}>
+                    <th key={column.title} {...sized(column)} title={column.hint}>
                       {column.heading ?? column.title}
+                      {column !== MESSAGE && column !== BOTH && <ResizeHandle title={column.title} onWidth={setWidth} />}
                     </th>
                   ))}
                 </tr>
@@ -606,7 +720,7 @@ function AlertTable({
                     {columns.map((column) => {
                       const text = column.value(row);
                       return (
-                        <td key={column.title} className={column.className} title={column.tip?.(row)}>
+                        <td key={column.title} {...sized(column)} title={column.tip?.(row)}>
                           {column.render ? column.render(row) : text}
                         </td>
                       );

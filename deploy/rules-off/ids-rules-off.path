@@ -1,0 +1,11 @@
+# Starts ids-rules-off.service each time the dashboard saves its list of
+# rules turned off (deploy/install-rules-off.sh puts the list's place in).
+[Unit]
+Description=IDS dashboard: watch the list of rules turned off
+
+[Path]
+PathChanged=@LIST@
+Unit=ids-rules-off.service
+
+[Install]
+WantedBy=multi-user.target
