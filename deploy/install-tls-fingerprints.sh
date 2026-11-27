@@ -19,13 +19,25 @@
 #   if the check fails.
 # - Then Suricata is restarted (a rule reload keeps the old lists), and the
 #   dashboard's rule count and rule index are brought up to date.
+#
+# To take the rules out of Suricata again:
+#
+#     sudo deploy/install-tls-fingerprints.sh --remove
+#
+# That empties /etc/suricata/rules/tls-fingerprints.rules (an empty file
+# loads no rules; the old one is kept as *.bak-<time>) and leaves
+# tls-fingerprints.off beside it, so deploy/apply-suricata-settings.sh leaves
+# them out too; running this without --remove puts them back. The TLS
+# Fingerprints page doesn't need them: it reads Suricata's TLS records.
 set -euo pipefail
 
 restart=yes
+mode=install
 case "${1:-}" in
     "") ;;
     --no-restart) restart=no ;;
-    -h | --help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --remove) mode=remove ;;
+    -h | --help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
 esac
 
@@ -47,6 +59,19 @@ installed=(
     tls-fingerprints-bad-ja3.lst
     tls-fingerprints-bad-ja3s.lst
 )
+# Left by --remove: the rules stay out (deploy/apply-suricata-settings.sh).
+off="$rules_dir/tls-fingerprints.off"
+
+if [[ $mode == remove ]]; then
+    echo "== Taking the TLS fingerprint rules out of Suricata"
+    if [[ -s "$rules_dir/tls-fingerprints.rules" ]]; then
+        cp -p "$rules_dir/tls-fingerprints.rules" "$rules_dir/tls-fingerprints.rules.bak-$stamp"
+    fi
+    install -m 0644 /dev/null "$rules_dir/tls-fingerprints.rules"
+    printf '%s\n' "Left by deploy/install-tls-fingerprints.sh --remove on $(date '+%F %T'):" \
+        "the TLS fingerprint rules stay out; running it without --remove puts them back." > "$off"
+    echo "   $rules_dir/tls-fingerprints.rules is empty; $off left"
+else
 
 echo "== Checking the known-bad lists and writing them for Suricata"
 work="$(mktemp -d)"
@@ -136,6 +161,8 @@ lines.insert(last + 1, f"{lead}- {rules}\n")
 path.write_text("".join(lines))
 print(f"   added {rules}")
 PYTHON
+rm -f "$off"
+fi
 
 if [[ $restart == no ]]; then
     echo "== Installed; Suricata loads them when it restarts"

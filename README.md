@@ -358,7 +358,9 @@ malware), never what it sends. With `sudo deploy/apply-suricata-settings.sh`
 - Suricata alerts on a client fingerprint new on the network (JA4), on a TLS
   client a device never used before, and on every connection with a
   fingerprint on the known-bad lists
-  (`deploy/suricata/tls-fingerprints/known-bad-*.txt`; SIDs 1000101–1000108);
+  (`deploy/suricata/tls-fingerprints/known-bad-*.txt`; SIDs 1000101–1000108).
+  `sudo deploy/install-tls-fingerprints.sh --remove` takes these rules out
+  (this lab's VM since 27 Nov 2026) and the rest below still works;
 - the collector keeps each device's fingerprints (connections, first and
   last seen, sites), which the dashboard's **TLS Fingerprints** page shows.
   It names each one's program from the threat-intel database when FoxIO's

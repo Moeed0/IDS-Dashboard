@@ -25,7 +25,8 @@
 # - JA3, JA3S and JA4 TLS fingerprints on (ja3-fingerprints and
 #   ja4-fingerprints: yes): Suricata adds them to its TLS and QUIC records
 #   and to every alert on a TLS connection; and the fingerprint rules
-#   (deploy/install-tls-fingerprints.sh, deploy/suricata/tls-fingerprints/).
+#   (deploy/install-tls-fingerprints.sh, deploy/suricata/tls-fingerprints/),
+#   unless they were taken out with its --remove.
 # - Its logs are no longer open to every user: root writes them, and only
 #   this folder's owner (the collector and the dashboard) may read them too.
 #
@@ -166,7 +167,12 @@ done
 suricata-update --no-test --quiet
 
 echo "== The TLS fingerprint rules"
-"$repo_dir/deploy/install-tls-fingerprints.sh" --no-restart
+if [[ -e /etc/suricata/rules/tls-fingerprints.off ]]; then
+    # Taken out with deploy/install-tls-fingerprints.sh --remove.
+    echo "   Left out (tls-fingerprints.off): sudo deploy/install-tls-fingerprints.sh puts them back"
+else
+    "$repo_dir/deploy/install-tls-fingerprints.sh" --no-restart
+fi
 
 echo "== Logs readable by root and $owner only"
 install -d /etc/systemd/system/suricata.service.d
